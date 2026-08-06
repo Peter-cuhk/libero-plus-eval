@@ -141,7 +141,21 @@ for lib in libMagickWand-7.Q16HDRI.so libglib-2.0.so.0 libgthread-2.0.so.0; do
 done
 echo "  ImageMagick + glib 就位 ✓"
 
-step "6. 自检：LIBERO-plus 能否 import 且任务数正确"
+step "6. splits/full.json（纯派生数据，不随代码传输，本地重建）"
+LIBERO_PLUS_ROOT="$LIBERO_PLUS_ROOT" "$EVAL_ENV/bin/python" - "$REPO" <<'PY'
+import json, pathlib, sys
+repo = pathlib.Path(sys.argv[1])
+sys.path.insert(0, str(repo / "python"))
+import libero_plus_common as common
+
+out = repo / "splits" / "full.json"
+payload = {s: list(range(common.EXPECTED_TASK_COUNTS[s])) for s in common.SUITES}
+payload["_meta"] = {"note": "all 10,030 LIBERO-plus tasks", "total": common.EXPECTED_TOTAL}
+common.write_json(out, payload)
+print(f"  {out} ({common.shard_size(payload)} tasks)")
+PY
+
+step "7. 自检：LIBERO-plus 能否 import 且任务数正确"
 cfg=/tmp/libero-config-bootstrap
 mkdir -p "$cfg/datasets"
 printf '%s\n' \
