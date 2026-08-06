@@ -88,10 +88,18 @@ if [[ "$CHECKPOINT_DIR" != gs://* && ! -f "$CHECKPOINT_DIR/params/_METADATA" ]];
     exit 1
 fi
 
-mkdir -p "$output_dir" "$JAX_COMPILATION_CACHE_DIR"
-run_libs="$output_dir/runtime-libs"
-libero_config_dir="$output_dir/libero-config"
-mkdir -p "$run_libs" "$libero_config_dir" "$output_dir/libero-datasets"
+# All live writing happens on CPFS, never directly on the OSS output path.
+# /mnt/oss is ossfs2: it cannot create symlinks ("Operation not supported"),
+# and append/rename semantics are not dependable either -- episodes.jsonl is
+# opened in append mode and is the only source of truth for a score, so it must
+# not live there while the run is in flight. Results are published to
+# $output_dir at the end.
+: "${WORK_ROOT:=/mnt/cpfs/PeterX/train/libero-plus-eval}"
+work_dir="$WORK_ROOT/$(echo "$output_dir" | sed 's#^/mnt/oss/PeterX/outputs/##; s#/#_#g')"
+run_libs="$work_dir/runtime-libs"
+libero_config_dir="$work_dir/libero-config"
+mkdir -p "$work_dir" "$run_libs" "$libero_config_dir" "$work_dir/libero-datasets" "$JAX_COMPILATION_CACHE_DIR"
+mkdir -p "$output_dir" || echo "warning: 无法预建 OSS 输出目录 $output_dir（发布时再试）" >&2
 
 # LIBERO resolves every benchmark path through this config file. Writing our own
 # and pointing LIBERO_CONFIG_PATH at it avoids touching the shared ~/.libero.
@@ -99,7 +107,7 @@ printf '%s\n' \
     "benchmark_root: $benchmark_root/libero/libero" \
     "bddl_files: $benchmark_root/libero/libero/bddl_files" \
     "init_states: $benchmark_root/libero/libero/init_files" \
-    "datasets: $output_dir/libero-datasets" \
+    "datasets: $work_dir/libero-datasets" \
     "assets: $benchmark_root/libero/libero/assets" \
     > "$libero_config_dir/config.yaml"
 
@@ -132,7 +140,8 @@ echo "=== LIBERO-plus eval ==="
 echo "  benchmark    : $BENCHMARK ($benchmark_root)"
 echo "  config/ckpt  : $CONFIG_NAME  <-  $CHECKPOINT_DIR"
 echo "  split        : $shard_file  (shard $SHARD_INDEX/$NUM_SHARDS)"
-echo "  output       : $output_dir"
+echo "  work (CPFS)  : $work_dir"
+echo "  publish (OSS): $output_dir"
 echo "  trials/task  : $NUM_TRIALS_PER_TASK   workers: $NUM_WORKERS   seed: $SEED"
 echo "  renderer     : $MUJOCO_GL_BACKEND"
 
@@ -147,7 +156,7 @@ fi
 uv_args=(--frozen)
 [[ "$SKIP_UV_SYNC" == "1" ]] && uv_args+=(--no-sync)
 
-server_log="$output_dir/policy-server.log"
+server_log="$work_dir/policy-server.log"
 OPENPI_DATA_HOME="$OPENPI_DATA_HOME" \
 UV_CACHE_DIR="$UV_CACHE_DIR" \
 JAX_COMPILATION_CACHE_DIR="$JAX_COMPILATION_CACHE_DIR" \
@@ -185,7 +194,7 @@ client_args=(
     --shard-file "$shard_file"
     --shard-index "$SHARD_INDEX"
     --num-shards "$NUM_SHARDS"
-    --out "$output_dir"
+    --out "$work_dir"
     --host 127.0.0.1
     --port "$SERVER_PORT"
     --server-handshake-timeout-s "$SERVER_HANDSHAKE_TIMEOUT_S"
@@ -214,9 +223,25 @@ printf '%s\n' \
     "benchmark: $BENCHMARK" \
     "config: $CONFIG_NAME" \
     "checkpoint: $CHECKPOINT_DIR" \
-    "shard_file: $shard_file" \
+    "split_file: $shard_file" \
+    "shard: $SHARD_INDEX/$NUM_SHARDS" \
     "num_trials_per_task: $NUM_TRIALS_PER_TASK" \
     "seed: $SEED" \
-    > "$output_dir/evaluation.yaml"
-touch "$output_dir/_SUCCESS"
-echo "=== shard done: $output_dir ==="
+    > "$work_dir/evaluation.yaml"
+touch "$work_dir/_SUCCESS"
+
+# Publish to OSS with plain copies: ossfs2 has no symlinks and unreliable
+# rename, so never move/link into it -- copy whole files only.
+echo "发布结果到 $output_dir"
+if mkdir -p "$output_dir/videos" 2>/dev/null; then
+    for f in episodes.jsonl summary.json evaluation.yaml policy-server.log _SUCCESS; do
+        [[ -e "$work_dir/$f" ]] && cp -f "$work_dir/$f" "$output_dir/$f" || true
+    done
+    if [[ -d "$work_dir/videos" ]]; then
+        find "$work_dir/videos" -maxdepth 1 -type f -exec cp -f {} "$output_dir/videos/" \; || true
+    fi
+    echo "  已发布: $(ls "$output_dir" | tr '\n' ' ')"
+else
+    echo "  OSS 输出目录不可写，结果留在 $work_dir" >&2
+fi
+echo "=== shard done ===  work=$work_dir  published=$output_dir"

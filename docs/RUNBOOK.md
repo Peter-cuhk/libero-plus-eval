@@ -120,14 +120,24 @@ mujoco 析构器的已知噪音，不影响结果。
 | micromamba / conda | 镜像里没有；用 CPFS 上的 `tools/mamba/micromamba` |
 | `gs://openpi-assets` | **可直取**（gcsfs `token="anon"`）。`pi05_libero` = 16 个文件 / 12.44GB。**带宽是总量受限，不是单连接受限**：单流 3.5 MB/s，32 路并发 range 请求也只有约 3.8 MB/s 聚合——12GB 就是要花约 1 小时。用 `python/fetch_gcs_checkpoint.py` 提前预热，别让它卡在评测 job 头上。（Peter 自己训练的 ckpt 走跨区 rclone，不受此影响） |
 
-### 3.4 DLC 提交的两个硬限制
+### 3.4 `/mnt/oss` 是 ossfs2，不能当工作目录
+
+实测：`ln -s` 直接报 `Operation not supported`。append 写与 rename 同样不可依赖，
+而 `episodes.jsonl` 正是以 append 模式打开、且是成绩的唯一事实来源。
+
+**所以 `run_eval.sh` 把全部实时写入放在北京 CPFS 的 `WORK_ROOT`
+（默认 `/mnt/cpfs/PeterX/train/libero-plus-eval/<...>`），跑完再整份 `cp` 发布到
+OSS 输出目录。** 发布只用整文件复制，绝不 link/move 进 ossfs。
+断点续跑读的是 CPFS 上的工作目录，所以跨 job 重启也有效。
+
+### 3.5 DLC 提交的两个硬限制
 
 * **UserCommand 上限 65,536 字节**（超了报 `The job parameters length(69665) exceeds limit(65536)`）。
   北京 CPFS 上还没有本仓库时，可以把 tar.gz base64 内联进命令送过去（整个仓库约 58KB base64，刚好够）；
   再大就得先落一次盘，之后只补送单个文件。
 * **0 卡 job 拿不到 NVIDIA 运行时**，见 §3.1。
 
-### 3.5 openpi 的 checkpoint 缓存布局
+### 3.6 openpi 的 checkpoint 缓存布局
 
 `openpi.shared.download.maybe_download` 把 `gs://<netloc>/<path>` 缓存到
 `$OPENPI_DATA_HOME/<netloc>/<path>`，即
