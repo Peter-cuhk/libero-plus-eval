@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import argparse
 import collections
+import contextlib
+import io
 import logging
 import os
 import pathlib
@@ -70,7 +72,10 @@ def main() -> int:
             label = f"{category} | {suite}[{index}] {record['name'][:70]}"
             started = time.monotonic()
             try:
-                task_suite = libero_benchmark.get_benchmark_dict()[suite]()
+                # LIBERO-plus prints the whole ~2,500-entry task order on every
+                # benchmark construction; keep it out of the smoke log.
+                with contextlib.redirect_stdout(io.StringIO()):
+                    task_suite = libero_benchmark.get_benchmark_dict()[suite]()
                 task = task_suite.get_task(index)
                 init_states = task_suite.get_task_init_states(index)
                 bddl_path = os.path.join(get_libero_path("bddl_files"), task.problem_folder, task.bddl_file)

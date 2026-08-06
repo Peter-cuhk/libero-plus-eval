@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import argparse
 import collections
+import contextlib
 import dataclasses
+import io
 import json
 import logging
 import multiprocessing
@@ -62,6 +64,26 @@ def _quat2axisangle(quat):
     return (quat[:3] * 2.0 * np.arccos(quat[3])) / den
 
 
+_BENCHMARK_CACHE: dict = {}
+
+
+def _get_task_suite(suite: str):
+    """Build (once per worker process) the LIBERO benchmark object for a suite.
+
+    Two reasons this is cached rather than rebuilt per task:
+      - constructing it materialises ~2,500 Task tuples;
+      - LIBERO-plus prints the entire task-order list on every construction,
+        which is ~15KB of stdout each time. Suppress that too: at 10,030 tasks
+        it would otherwise bury the run's real log lines under 150MB of noise.
+    """
+    if suite not in _BENCHMARK_CACHE:
+        from libero.libero import benchmark as libero_benchmark
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            _BENCHMARK_CACHE[suite] = libero_benchmark.get_benchmark_dict()[suite]()
+    return _BENCHMARK_CACHE[suite]
+
+
 def _make_env(suite: str, task_index: int, seed: int):
     """Build the LIBERO-plus environment for one task index.
 
@@ -70,11 +92,10 @@ def _make_env(suite: str, task_index: int, seed: int):
     argument to decode camera / robot-init perturbations out of the filename;
     a Path raises TypeError there.
     """
-    from libero.libero import benchmark as libero_benchmark
     from libero.libero import get_libero_path
     from libero.libero.envs import OffScreenRenderEnv
 
-    task_suite = libero_benchmark.get_benchmark_dict()[suite]()
+    task_suite = _get_task_suite(suite)
     task = task_suite.get_task(task_index)
     init_states = task_suite.get_task_init_states(task_index)
 
@@ -111,9 +132,14 @@ def run_task(payload: Tuple[str, int, dict, bool]) -> List[dict]:
     max_steps = common.MAX_STEPS[suite]
 
     env, task, init_states = _make_env(suite, task_index, config.seed + task_index)
-    client = websocket_client_policy.WebsocketClientPolicy(
-        config.host, config.port, open_timeout=config.server_handshake_timeout_s
-    )
+    # `open_timeout` exists in some openpi forks but not in upstream, where the
+    # constructor is (host, port, api_key). Stay compatible with both.
+    try:
+        client = websocket_client_policy.WebsocketClientPolicy(
+            config.host, config.port, open_timeout=config.server_handshake_timeout_s
+        )
+    except TypeError:
+        client = websocket_client_policy.WebsocketClientPolicy(config.host, config.port)
 
     # LIBERO-plus collapses some perturbations to a single init state, so never
     # ask for more trials than the benchmark actually provides.
@@ -217,7 +243,7 @@ def run_task(payload: Tuple[str, int, dict, bool]) -> List[dict]:
     return records
 
 
-def build_worklist(shard, classification, done_keys, num_trials, video_tasks):
+def build_worklist(shard, done_keys, video_tasks):
     """Expand a shard into per-task work items, skipping already-finished tasks."""
     work = []
     skipped = 0
@@ -261,11 +287,8 @@ def main() -> int:
 
     root = pathlib.Path(args.benchmark_root) if args.benchmark_root else common.libero_plus_root()
     if not args.skip_alignment_check:
-        classification = common.load_task_classification(root)
-        common.check_alignment(classification, root)
+        common.check_alignment(common.load_task_classification(root), root)
         logging.info("task_id <-> category alignment verified for all %d tasks", common.EXPECTED_TOTAL)
-    else:
-        classification = None
 
     shard = common.load_shard(args.shard_file)
     out_dir = pathlib.Path(args.out)
@@ -282,7 +305,7 @@ def main() -> int:
     rng = random.Random(args.seed)
     video_tasks = set(rng.sample(all_tasks, min(args.save_videos, len(all_tasks)))) if args.save_videos else set()
 
-    work, skipped = build_worklist(shard, classification, done_keys, args.num_trials_per_task, video_tasks)
+    work, skipped = build_worklist(shard, done_keys, video_tasks)
     logging.info("shard=%d tasks, skipped=%d, to run=%d", len(all_tasks), skipped, len(work))
     if not work:
         logging.info("nothing to do")
