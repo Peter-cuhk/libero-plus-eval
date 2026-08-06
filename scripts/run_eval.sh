@@ -36,6 +36,9 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # that would have to be shipped across regions.
 : "${SHARD_INDEX:=0}"
 : "${NUM_SHARDS:=1}"
+# 语言 swap 自检（见 docs/SWAP_PROTOCOL.md）：只换提示词，环境与判据不变
+: "${LANGUAGE_SWAP_FILE:=}"
+: "${RECORD_FIRST_CHUNK:=0}"
 
 # --- where things live ------------------------------------------------------
 : "${LIBERO_PLUS_ROOT:=/mnt/cpfs/PeterX/repos/LIBERO-plus}"
@@ -205,6 +208,8 @@ client_args=(
     --benchmark-root "$benchmark_root"
 )
 [[ "$RESUME" == "1" ]] && client_args+=(--resume)
+[[ -n "$LANGUAGE_SWAP_FILE" ]] && client_args+=(--language-swap-file "$LANGUAGE_SWAP_FILE")
+[[ "$RECORD_FIRST_CHUNK" == "1" ]] && client_args+=(--record-first-chunk)
 client_args+=("${alignment_flag[@]+"${alignment_flag[@]}"}")
 
 env \

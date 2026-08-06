@@ -61,6 +61,8 @@ def build_command(args, split_path: str, shard_index: int, shard_out: str) -> st
             ("SHARD_INDEX", str(shard_index)),
             ("NUM_SHARDS", str(args.shards)),
         ]
+        + ([("LANGUAGE_SWAP_FILE", args.language_swap_file)] if args.language_swap_file else [])
+        + ([("RECORD_FIRST_CHUNK", "1")] if args.record_first_chunk else [])
         + ([("NUM_TRIALS_PER_TASK", str(args.num_trials_per_task))] if args.num_trials_per_task else [])
     )
     run = (
@@ -91,6 +93,10 @@ def main() -> int:
     parser.add_argument("--num-workers", type=int, default=16)
     parser.add_argument("--num-trials-per-task", type=int, default=0, help="0 = protocol default (plus:1, clean:50)")
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--language-swap-file", default="",
+                        help="语言 swap 自检的替换表（见 docs/SWAP_PROTOCOL.md）；路径按 job 侧解析")
+    parser.add_argument("--record-first-chunk", action="store_true",
+                        help="记录每条 episode 的首个 action chunk（swap 自检的 PSD 指标需要）")
     parser.add_argument("--gpu", type=int, default=1)
     parser.add_argument("--cpu", type=int, default=16)
     parser.add_argument("--memory", default="128Gi")
