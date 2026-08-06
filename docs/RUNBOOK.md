@@ -170,6 +170,11 @@ repos/openpi-icl/.venv 的 jax.devices()  → [CpuDevice(id=0)]
   （`task_order_index=0` 是恒等序，10,030 条 name 零错位）。七维统计靠这个映射。
   `libero_plus_common.check_alignment()` 每次运行都会重新验证，不依赖这份记录。
 * assets.zip 解压后 **448,799 个文件 / 8.3GiB**，与 zip 内条目数完全一致。
+* **全量 10,030 个环境构造检查：10,030/10,030 通过，0 失败**（`validate_envs.py`，本机 OSMesa）。
+  七维计数与 `task_classification.json` 逐项吻合，详见 `docs/env_validation_20260806.md`。
+  附带发现：**1,525 个任务只有 1 个 init state**（恰好是 Objects Layout 全部，`_add_` 分支
+  会 `reshape(1,-1)`），其余 8,505 个各有 50 个。所以 **LIBERO-plus 档位不要动
+  `num_trials_per_task`**——调大只会让 8,505 个任务多跑，各维权重被悄悄改掉。
 * **PPU 本机 OSMesa 冒烟：14/14 通过**（七维各 2 个 task，`smoke_env.py`）。
   Camera Viewpoints 出图确为偏移视角，Sensor Noise 出图确有 wand 施加的模糊/退化，
   说明 `_view_/_initstate_/_noise_/_language_/_table_/_light_/_add_` 全部分支与
