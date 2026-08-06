@@ -156,6 +156,16 @@ print(f"  {out} ({common.shard_size(payload)} tasks)")
 PY
 
 step "7. 自检：LIBERO-plus 能否 import 且任务数正确"
+# bootstrap 通常跑在 0 卡 job 上，那种容器没有 NVIDIA 运行时，MUJOCO_GL=egl 会在
+# import mujoco 时就抛 "Cannot initialize a EGL device display"。这里只需要 import
+# 和数任务数，不需要硬件渲染，所以没有 GPU 时退到 osmesa。EGL 本身由带卡的
+# run_smoke_env.sh 去验证。
+if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+    selfcheck_gl=egl
+else
+    selfcheck_gl=osmesa
+    echo "  本 job 无 GPU，自检用 osmesa（EGL 留给带卡的 run_smoke_env.sh 验证）"
+fi
 cfg=/tmp/libero-config-bootstrap
 mkdir -p "$cfg/datasets"
 printf '%s\n' \
@@ -167,7 +177,7 @@ printf '%s\n' \
     > "$cfg/config.yaml"
 MAGICK_HOME="$EVAL_ENV" LD_LIBRARY_PATH="$EVAL_ENV/lib" \
 LIBERO_CONFIG_PATH="$cfg" PYTHONPATH="$LIBERO_PLUS_ROOT" \
-MUJOCO_GL=egl PYOPENGL_PLATFORM=egl \
+MUJOCO_GL="$selfcheck_gl" PYOPENGL_PLATFORM="$selfcheck_gl" \
 "$EVAL_ENV/bin/python" - <<'PY' | tail -8
 from libero.libero import benchmark
 d = benchmark.get_benchmark_dict()
