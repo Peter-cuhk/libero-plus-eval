@@ -110,6 +110,16 @@ if [[ -n "$EXTRA_LIB_DIR" && -d "$EXTRA_LIB_DIR" ]]; then
     done
 fi
 
+# The evaluation environment is a micromamba prefix that ships both ImageMagick
+# (required by `wand`, which env_wrapper.py imports at module level) and glib
+# (libgthread/libglib, absent from the DLC images). Put its lib dir on the
+# search path and point wand at it.
+eval_prefix="$(dirname "$(dirname "$EVAL_PYTHON")")"
+if [[ ! -e "$eval_prefix/lib/libMagickWand-7.Q16HDRI.so" ]]; then
+    echo "Evaluation env is missing ImageMagick: $eval_prefix/lib (run bootstrap_h20.sh)" >&2
+    exit 1
+fi
+
 echo "=== LIBERO-plus eval ==="
 echo "  benchmark    : $BENCHMARK ($benchmark_root)"
 echo "  config/ckpt  : $CONFIG_NAME  <-  $CHECKPOINT_DIR"
@@ -179,7 +189,8 @@ env \
     LIBERO_PLUS_ROOT="$benchmark_root" \
     LIBERO_CONFIG_PATH="$libero_config_dir" \
     PYTHONPATH="$benchmark_root:$OPENPI_REPO/packages/openpi-client/src${PYTHONPATH:+:$PYTHONPATH}" \
-    LD_LIBRARY_PATH="$run_libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+    MAGICK_HOME="$eval_prefix" \
+    LD_LIBRARY_PATH="$run_libs:$eval_prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
     ${egl_manifest:+__EGL_VENDOR_LIBRARY_FILENAMES="$egl_manifest"} \
     MUJOCO_GL="$MUJOCO_GL_BACKEND" \
     PYOPENGL_PLATFORM="$MUJOCO_GL_BACKEND" \

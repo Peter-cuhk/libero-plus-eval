@@ -1,0 +1,51 @@
+# Evaluation-client dependencies (python 3.8).
+#
+# Scoped to what `libero/libero/` actually imports plus the rollout client's own
+# needs. LIBERO-plus's requirements.txt is written for the full repo including
+# `libero/lifelong/` (training / lifelong-learning code we never touch); pulling
+# that in drags robomimic -> torchvision, which on this cluster resolves to a
+# PPU-specific source distribution that cannot build. Pins are kept at
+# LIBERO-plus's values for everything that remains.
+#
+# Verified import set of libero/libero/:
+#   PIL bddl cloudpickle cv2 easydict gym h5py huggingface_hub imageio
+#   matplotlib mujoco numpy robosuite scipy skimage termcolor torch tqdm wand yaml
+
+# --- LIBERO-plus pins (unchanged) ---
+numpy==1.22.4
+robosuite==1.4.0          # LIBERO-plus pins 1.4.0; openpi leaves it unpinned (1.4.1)
+bddl==1.0.1
+future==0.18.2            # undeclared runtime dep of bddl (bddl/backend_abc.py imports future.utils)
+easydict==1.9
+gym==0.25.2
+cloudpickle==2.1.0
+matplotlib==3.5.3
+
+# --- extra_requirements.txt ---
+# `wand` is imported at module import time by libero/libero/envs/env_wrapper.py,
+# so ImageMagick must be present for EVERY dimension, not just Sensor Noise.
+wand
+scikit-image
+
+# --- imported by libero/libero but absent from its requirements file ---
+h5py
+huggingface_hub
+Pillow
+termcolor
+scipy
+
+# --- headless OpenCV ---
+# LIBERO pins the GUI wheel, which drags in libGLX and breaks EGL-only rollouts.
+opencv-python-headless==4.6.0.66
+
+# --- rollout client ---
+imageio==2.35.1
+imageio-ffmpeg==0.5.1
+tqdm
+pyyaml
+msgpack                   # openpi-client transport
+websockets                # openpi-client transport
+
+# CPU-side only: the client calls torch.load() on .pruned_init files and never
+# runs a network, so the plain PyPI build is enough. Pinned to openpi's version.
+torch==1.11.0
