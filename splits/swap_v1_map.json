@@ -1,0 +1,59 @@
+{
+  "libero_goal": {
+    "0": {
+      "swap_from": 5,
+      "original": "Open the middle layer of the drawer",
+      "swapped": "Push the plate to the front of the stove"
+    },
+    "1": {
+      "swap_from": 6,
+      "original": "Put the bowl on the stove",
+      "swapped": "Put the cream cheese on the bowl"
+    },
+    "2": {
+      "swap_from": 7,
+      "original": "Put the wine bottle on the top of the drawer",
+      "swapped": "Turn on the stove"
+    },
+    "3": {
+      "swap_from": 8,
+      "original": "Open the top layer of the drawer and put the bowl inside",
+      "swapped": "Put the bowl on the plate"
+    },
+    "4": {
+      "swap_from": 9,
+      "original": "Put the bowl on the top of the drawer",
+      "swapped": "Put the wine bottle on the rack"
+    },
+    "5": {
+      "swap_from": 0,
+      "original": "Push the plate to the front of the stove",
+      "swapped": "Open the middle layer of the drawer"
+    },
+    "6": {
+      "swap_from": 1,
+      "original": "Put the cream cheese on the bowl",
+      "swapped": "Put the bowl on the stove"
+    },
+    "7": {
+      "swap_from": 2,
+      "original": "Turn on the stove",
+      "swapped": "Put the wine bottle on the top of the drawer"
+    },
+    "8": {
+      "swap_from": 3,
+      "original": "Put the bowl on the plate",
+      "swapped": "Open the top layer of the drawer and put the bowl inside"
+    },
+    "9": {
+      "swap_from": 4,
+      "original": "Put the wine bottle on the rack",
+      "swapped": "Put the bowl on the top of the drawer"
+    }
+  },
+  "_meta": {
+    "pair_offset": 5,
+    "libero_root": "/mnt/cpfs/PeterX/policy/openpi-ee34/third_party/libero",
+    "note": "FROZEN. Changing the pairing requires a new v2 and a re-run of the baseline."
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "libero_spatial": [],
+  "libero_object": [],
+  "libero_goal": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9
+  ],
+  "libero_10": [],
+  "_meta": {
+    "note": "language-swap self-check, clean LIBERO only. See docs/SWAP_PROTOCOL.md",
+    "suites": [
+      "libero_goal"
+    ],
+    "total": 10
+  }
+}

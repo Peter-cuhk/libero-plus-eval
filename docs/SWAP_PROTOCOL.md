@@ -1,0 +1,87 @@
+# 语言 swap 自检协议 v1
+
+## 为什么需要它
+
+LIBERO-plus 的 **Language Instructions 维测的是 paraphrase 鲁棒性**——用 LLM 把同一条指令换个说法，
+看模型还认不认。**一个完全无视语言的模型在这一维上反而拿高分**：它照着视觉做同一件事，
+换不换说法都一样。我们实测 π0.5 在该维 85.04，这个数字**不能**用来说明模型在听指令。
+
+LIBERO-plus 论文自己的核心结论之一就是 "**Language Ignorance**: models largely ignore language
+instructions, functioning more like Vision-Action models"。**swap 自检就是把这句话变成一个可测的数字。**
+
+## 设计
+
+需要「单一场景 + 同一批物体 + goal 谓词两两不同」。逐个核对 bddl 后，**只有 `libero_goal` 合格**：
+
+| suite | 物体集合 | goal 谓词 | 判定 |
+|---|---|---|---|
+| `libero_goal` | 10 个任务共享 `{akita_black_bowl_1, cream_cheese_1, plate_1, wine_bottle_1}` | 10 个两两不同 | **✅ 用它** |
+| `libero_object` | 每个任务只实例化 10 件杂货中的 **7 件**，且集合各不相同 | 10 个不同 | ❌ 换来的指令常点名**场上没有的物体** |
+| `libero_spatial` | 共享 | **10 个任务共用同一个谓词** `(On akita_black_bowl_1 plate_1)` | ❌ 区分全靠语言，换指令会歪打正着 |
+
+> 这三行是实测的，不是推测。`make_swap_split.py` 每次生成都会重新核验，
+> 任何一条不成立就直接退出——因为一旦不成立，指标本身就没有意义。
+
+对每个任务 A，把提示词换成**同一 suite 内另一个任务 B 的指令**，而环境（含成功判据）仍是 A 的：
+
+* 配对规则 `B = (A + 5) mod 10`。这是一个无不动点的对合（A↔A+5 互换），确定性、无需随机种子。
+* 两个条件跑**同一批任务、同一批 init state、同一个 seed**，只有提示词不同。
+
+| 条件 | 环境（判据） | 提示词 |
+|---|---|---|
+| correct | A | A |
+| swapped | A | B |
+
+## 指标
+
+### LFR — Language-Following Rate（结果层）
+
+```
+LFR = 1 − S_swapped / S_correct
+```
+
+* `S_correct`：给对指令时 A 的成功率
+* `S_swapped`：**被告知去做 B 时，仍然完成了 A** 的比率
+
+**LFR = 0 → 模型完全无视语言**（叫它做 B，它照样把 A 做完）。
+**LFR = 1 → 模型完全跟随语言**（被告知做 B 后不再完成 A）。
+
+除以 `S_correct` 是为了消掉「模型本来就做不好这个任务」的混淆。
+
+### PSD — Prompt Sensitivity of the first action chunk（行为层）
+
+LFR 只说明模型**不再做 A**，不能说明它**改去做 B** 了——也可能是原地发呆。所以补一个行为层指标。
+
+关键在于：静置 10 步之后的**第一次推理**，两个条件面对的观测、状态、seed **完全相同**，
+唯一的差别就是提示词。所以第一个 action chunk 的差异是一次**完美受控**的语言敏感度测量，
+不受轨迹发散的干扰。
+
+```
+PSD = mean_episodes ‖ chunk_correct − chunk_swapped ‖₂ / ‖chunk_correct‖₂
+```
+
+**PSD ≈ 0 是「模型在决策点上根本没读提示词」的直接证据**，比任何成功率都硬。
+
+### 判读
+
+| LFR | PSD | 解读 |
+|---|---|---|
+| ≈0 | ≈0 | 完全无视语言（LIBERO-plus 论文的论断成立）|
+| ≈0 | >0 | 读了提示词但行为收敛回同一个动作 |
+| 高 | >0 | 真的在跟随指令 |
+| 高 | ≈0 | 异常，需排查（多半是 swap 配错或环境不共享场景）|
+
+## 规模与成本
+
+10 个任务（libero_goal）× 50 trial = **500 episode/条件，两条件共 1,000**。
+按实测吞吐，各 2 分片约 30 分钟。
+
+> 样本量受限于「只有一个 suite 合格」。若日后需要更大样本，`libero_90` 的 90 个任务
+> 分布在约 9 个场景里、每个场景约 10 个任务，是 v2 的自然扩展方向——但那要新开 v2 并重跑基线。
+
+## 红线
+
+* swap 是**诊断指标，不是榜单成绩**，不进 `LEADERBOARD.md` 的 Overall 列。
+* 配对规则和 suite 选择**一次定死**（本文件即定义），改了要新开 `v2` 并重跑基线，
+  不能拿 v1 与 v2 的数字对比。
+* 只在**净版 LIBERO** 上跑：目的是让语言成为唯一变量，叠加扰动会污染信号。

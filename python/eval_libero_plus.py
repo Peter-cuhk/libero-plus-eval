@@ -49,6 +49,7 @@ class EvalConfig:
     seed: int
     out_dir: str
     video_dir: Optional[str]
+    record_first_chunk: bool = False
 
 
 def _quat2axisangle(quat):
@@ -131,9 +132,9 @@ def _write_video(path: pathlib.Path, frames) -> None:
     imageio.mimwrite(str(path), [np.asarray(frame[:, ::-1]) for frame in frames], fps=20)
 
 
-def run_task(payload: Tuple[str, int, dict, bool]) -> List[dict]:
+def run_task(payload: Tuple[str, int, dict, bool, Optional[str]]) -> List[dict]:
     """Roll out every trial of one task. Returns one record per episode."""
-    suite, task_index, config_dict, record_video = payload
+    suite, task_index, config_dict, record_video, swapped_language = payload
     config = EvalConfig(**config_dict)
 
     import numpy as np
@@ -156,7 +157,10 @@ def run_task(payload: Tuple[str, int, dict, bool]) -> List[dict]:
     # LIBERO-plus collapses some perturbations to a single init state, so never
     # ask for more trials than the benchmark actually provides.
     num_trials = min(config.num_trials_per_task, len(init_states))
-    task_description = task.language
+    # Language-swap self-check: the environment (and its success predicate) stays
+    # this task's; only the prompt is replaced with another task's instruction.
+    # See docs/SWAP_PROTOCOL.md.
+    task_description = swapped_language if swapped_language is not None else task.language
 
     records = []
     for trial in range(num_trials):
@@ -171,6 +175,7 @@ def run_task(payload: Tuple[str, int, dict, bool]) -> List[dict]:
         error = None
         infer_calls = 0
         infer_ms_total = 0.0
+        first_chunk = None
         while step < max_steps + config.num_steps_wait:
             try:
                 # Let objects settle before handing control to the policy.
@@ -209,6 +214,13 @@ def run_task(payload: Tuple[str, int, dict, bool]) -> List[dict]:
                     infer_ms_total += (time.monotonic() - infer_started) * 1000.0
                     infer_calls += 1
                     action_chunk = response["actions"]
+                    if config.record_first_chunk and first_chunk is None:
+                        # The first inference happens after the fixed settling
+                        # steps, so both swap conditions see an identical
+                        # observation/state/seed here -- the only difference is
+                        # the prompt. That makes this chunk a perfectly
+                        # controlled probe of prompt sensitivity.
+                        first_chunk = np.asarray(action_chunk, dtype=float).round(6).tolist()
                     if len(action_chunk) < config.replan_steps:
                         raise RuntimeError(
                             f"policy returned {len(action_chunk)} actions, need {config.replan_steps}"
@@ -240,6 +252,8 @@ def run_task(payload: Tuple[str, int, dict, bool]) -> List[dict]:
                 "task_id": task_index,
                 "task_name": task.name,
                 "language": str(task_description),
+                "language_original": str(task.language),
+                "swapped": swapped_language is not None,
                 "trial": trial,
                 "success": bool(done),
                 "steps": step,
@@ -247,6 +261,7 @@ def run_task(payload: Tuple[str, int, dict, bool]) -> List[dict]:
                 "infer_calls": infer_calls,
                 "infer_ms_mean": round(infer_ms_total / infer_calls, 2) if infer_calls else None,
                 "elapsed_s": round(time.monotonic() - started, 2),
+                "first_chunk": first_chunk,
                 "error": error,
             }
         )
@@ -289,6 +304,15 @@ def main() -> int:
     parser.add_argument("--replan-steps", type=int, default=5)
     parser.add_argument("--num-steps-wait", type=int, default=10)
     parser.add_argument("--save-videos", type=int, default=12, help="Number of tasks to record video for")
+    parser.add_argument(
+        "--language-swap-file", default=None,
+        help="Language-swap self-check: JSON {suite: {task_id: {swapped: '...'}}}. The environment and its "
+             "success predicate stay this task's; only the prompt is replaced. See docs/SWAP_PROTOCOL.md",
+    )
+    parser.add_argument(
+        "--record-first-chunk", action="store_true",
+        help="Store the first predicted action chunk per episode (needed for the swap test's PSD metric)",
+    )
     parser.add_argument("--resume", action="store_true", help="Skip tasks already present in episodes.jsonl")
     parser.add_argument(
         "--benchmark-root",
@@ -329,6 +353,21 @@ def main() -> int:
             done_keys.add((record["suite"], record["task_id"]))
         logging.info("resume: %d tasks already recorded in %s", len(done_keys), episodes_path)
 
+    swap_map = {}
+    if args.language_swap_file:
+        with open(args.language_swap_file) as f:
+            raw = json.load(f)
+        for suite in common.SUITES:
+            for task_id, entry in raw.get(suite, {}).items():
+                swap_map[(suite, int(task_id))] = entry["swapped"]
+        missing = [k for suite in common.SUITES for k in shard[suite] if (suite, k) not in swap_map]
+        if missing:
+            raise SystemExit(
+                f"--language-swap-file 缺少 {len(missing)} 个任务的替换指令，例如 {missing[:3]}；"
+                "swap 必须整批替换，漏一个就会把普通评测混进 swapped 条件"
+            )
+        logging.info("language swap: %d 个任务的提示词将被替换（环境与判据不变）", len(swap_map))
+
     all_tasks = [(suite, i) for suite in common.SUITES for i in shard[suite]]
     rng = random.Random(args.seed)
     video_tasks = set(rng.sample(all_tasks, min(args.save_videos, len(all_tasks)))) if args.save_videos else set()
@@ -350,9 +389,13 @@ def main() -> int:
         seed=args.seed,
         out_dir=str(out_dir),
         video_dir=str(out_dir / "videos") if args.save_videos else None,
+        record_first_chunk=args.record_first_chunk,
     )
     config_dict = dataclasses.asdict(config)
-    payloads = [(suite, task_index, config_dict, record_video) for suite, task_index, record_video in work]
+    payloads = [
+        (suite, task_index, config_dict, record_video, swap_map.get((suite, task_index)))
+        for suite, task_index, record_video in work
+    ]
 
     started = time.monotonic()
     last_report = started
@@ -391,6 +434,7 @@ def main() -> int:
         "episodes_errored": failures_hard,
         "num_trials_per_task": args.num_trials_per_task,
         "seed": args.seed,
+        "language_swap_file": args.language_swap_file or "",
         "wall_clock_s": round(time.monotonic() - started, 1),
     }
     common.write_json(out_dir / "summary.json", summary)
