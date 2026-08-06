@@ -215,6 +215,24 @@ PLAN 里「full 单卡 8–20h」的估算可以用这组实测数字替换。
 
 ---
 
+## 五点五、已验证的基线（2026-08-06，官方 pi05_libero）
+
+| 协议 | 实测 | 对照 | job |
+|---|---|---|---|
+| 净版 LIBERO 2,000ep（40task×50trial） | **97.10** ±0.74 | openpi 公布 96.85 | `dlctzml8qgziw5j1` 等 4 片 |
+| LIBERO-plus dev 1,540ep | **84.61** ±1.8 | 公开 π0.5 85.7 | `dlczjegwapvyd9ri` 等 4 片 |
+
+净版逐 suite：spatial 99.20 / object 98.40 / goal 97.60 / libero_10 93.20
+（公布 98.8 / 98.2 / 98.0 / 92.4）——四项全部落在 1pt 内，**整条管线的预处理已被证明正确**。
+
+dev 七维：Layout 85.00 / **Camera 70.45** / Robot init 75.00 / Language 87.73 /
+Light 96.36 / Background 95.91 / Noise 81.82。最弱的相机视角与机器人初始位姿
+与 LIBERO-plus 论文的核心结论一致。难度梯度 L1 94.44 → L5 65.11，单调。
+
+**这两个数字是回归基准**：以后动了评测端、换了环境、升了依赖，先重跑净版对 97.10。
+
+---
+
 ## 六、已验证的事实（可以直接引用）
 
 * LIBERO-plus @ `4976dc3`：spatial 2402 + object 2518 + goal 2591 + libero_10 2519 = **10,030**。
