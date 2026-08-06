@@ -355,6 +355,7 @@ def main() -> int:
     payloads = [(suite, task_index, config_dict, record_video) for suite, task_index, record_video in work]
 
     started = time.monotonic()
+    last_report = started
     completed = 0
     successes = 0
     failures_hard = 0
@@ -367,8 +368,13 @@ def main() -> int:
                     successes += int(record["success"])
                     failures_hard += int(record["error"] is not None)
                 completed += 1
-                if completed % 25 == 0 or completed == len(payloads):
-                    elapsed = time.monotonic() - started
+                # Also log on a timer: the clean-LIBERO regression runs only 10
+                # tasks per shard (50 trials each), so a pure every-25-tasks rule
+                # would print nothing at all until the shard finished.
+                now = time.monotonic()
+                if completed % 25 == 0 or completed == len(payloads) or now - last_report >= 300:
+                    last_report = now
+                    elapsed = now - started
                     rate = completed / elapsed if elapsed else 0.0
                     eta = (len(payloads) - completed) / rate if rate else float("nan")
                     logging.info(
