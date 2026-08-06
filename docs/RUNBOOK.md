@@ -118,7 +118,7 @@ mujoco 析构器的已知噪音，不影响结果。
 | `/mnt/oss/PeterX` | 可写，512T |
 | `apt-get install libmagickwand-dev` | 容器里可用（装的是 ImageMagick 6.9）。但我们走 conda 的 IM7，两个 region 保持一致 |
 | micromamba / conda | 镜像里没有；用 CPFS 上的 `tools/mamba/micromamba` |
-| `gs://openpi-assets` | **可直取**（gcsfs `token="anon"`）。`pi05_libero` = 16 个文件 / 12.44GB，但单流只有 **3.5 MB/s**（约 1 小时）。用 `python/fetch_gcs_checkpoint.py` 并行 range 下载预热缓存 |
+| `gs://openpi-assets` | **可直取**（gcsfs `token="anon"`）。`pi05_libero` = 16 个文件 / 12.44GB。**带宽是总量受限，不是单连接受限**：单流 3.5 MB/s，32 路并发 range 请求也只有约 3.8 MB/s 聚合——12GB 就是要花约 1 小时。用 `python/fetch_gcs_checkpoint.py` 提前预热，别让它卡在评测 job 头上。（Peter 自己训练的 ckpt 走跨区 rclone，不受此影响） |
 
 ### 3.4 DLC 提交的两个硬限制
 

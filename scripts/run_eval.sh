@@ -49,7 +49,11 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 : "${SERVER_PORT:=8000}"
 : "${SERVER_START_TIMEOUT:=1800}"      # first run must download the checkpoint
 : "${SERVER_HANDSHAKE_TIMEOUT_S:=600}"
-: "${SKIP_UV_SYNC:=0}"
+# Default OFF: bootstrap_h20.sh owns the openpi venv. A full run submits 8 shard
+# jobs that all point at the same .venv, and having each of them `uv sync` it
+# concurrently is both wasteful and a race. Set to 0 only for a single job whose
+# venv is known to be stale.
+: "${SKIP_UV_SYNC:=1}"
 : "${JAX_COMPILATION_CACHE_DIR:=/tmp/libero-plus-jax-cache}"
 : "${EGL_VENDOR_LIBRARY:=libEGL_nvidia.so.0}"
 : "${EGL_LOADER_LIBRARY:=/usr/lib/x86_64-linux-gnu/libEGL.so.1}"
@@ -136,6 +140,9 @@ echo "  renderer     : $MUJOCO_GL_BACKEND"
 cd "$OPENPI_REPO"
 if [[ "$SKIP_UV_SYNC" != "1" ]]; then
     UV_CACHE_DIR="$UV_CACHE_DIR" uv sync --frozen
+elif [[ ! -x "$OPENPI_REPO/.venv/bin/python" ]]; then
+    echo "openpi venv 不存在: $OPENPI_REPO/.venv (先跑 bootstrap_h20.sh，或设 SKIP_UV_SYNC=0)" >&2
+    exit 1
 fi
 uv_args=(--frozen)
 [[ "$SKIP_UV_SYNC" == "1" ]] && uv_args+=(--no-sync)
