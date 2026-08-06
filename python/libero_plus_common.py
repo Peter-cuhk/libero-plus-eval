@@ -108,7 +108,13 @@ def load_shard(path: pathlib.Path | str) -> Dict[str, List[int]]:
 
 
 def shard_size(shard: Dict[str, Sequence[int]]) -> int:
-    return sum(len(ids) for ids in shard.values())
+    """Total task count. Only suite keys are counted.
+
+    Split files carry a `_meta` dict alongside the suite lists; summing over
+    values() blindly adds len(_meta) and silently inflates the count (that is how
+    a 10,030-task split once reported 10,032).
+    """
+    return sum(len(shard[suite]) for suite in SUITES if suite in shard)
 
 
 def write_json(path: pathlib.Path | str, payload) -> None:
