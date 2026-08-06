@@ -220,7 +220,15 @@ PLAN 里「full 单卡 8–20h」的估算可以用这组实测数字替换。
 | 协议 | 实测 | 对照 | job |
 |---|---|---|---|
 | 净版 LIBERO 2,000ep（40task×50trial） | **97.10** ±0.74 | openpi 公布 96.85 | `dlctzml8qgziw5j1` 等 4 片 |
-| LIBERO-plus dev 1,540ep | **84.61** ±1.8 | 公开 π0.5 85.7 | `dlczjegwapvyd9ri` 等 4 片 |
+| LIBERO-plus dev 1,540ep | **84.61** ±1.8 | — | `dlczjegwapvyd9ri` 等 4 片 |
+| LIBERO-plus **full 10,030ep** | **84.20** ±0.71 | 见下 | `dlcpa64uieqca2bl` 等 8 片，0 错误 |
+
+full 七维：Layout 85.70 / **Camera 71.04** / **Robot init 75.55** / Language 85.04 /
+Light 97.11 / Background 96.00 / Noise 86.32。macro 85.25。
+**dev 的每一维都落在自身置信区间内命中 full 的值** —— dev_v1 作为筛选工具是可信的。
+
+**公开榜 Total 的口径已核实为 micro**（按维度任务数加权）：用 OpenVLA-OFT+ 的七维反推得
+micro 79.56，与 README 公布的 79.6 吻合（macro 会得 80.66）。`aggregate.py` 主报 micro 正确。
 
 净版逐 suite：spatial 99.20 / object 98.40 / goal 97.60 / libero_10 93.20
 （公布 98.8 / 98.2 / 98.0 / 92.4）——四项全部落在 1pt 内，**整条管线的预处理已被证明正确**。
