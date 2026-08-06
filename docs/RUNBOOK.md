@@ -118,6 +118,21 @@ mujoco 析构器的已知噪音，不影响结果。
 | `/mnt/oss/PeterX` | 可写，512T |
 | `apt-get install libmagickwand-dev` | 容器里可用（装的是 ImageMagick 6.9）。但我们走 conda 的 IM7，两个 region 保持一致 |
 | micromamba / conda | 镜像里没有；用 CPFS 上的 `tools/mamba/micromamba` |
+| `gs://openpi-assets` | **可直取**（gcsfs `token="anon"`）。`pi05_libero` = 16 个文件 / 12.44GB，但单流只有 **3.5 MB/s**（约 1 小时）。用 `python/fetch_gcs_checkpoint.py` 并行 range 下载预热缓存 |
+
+### 3.4 DLC 提交的两个硬限制
+
+* **UserCommand 上限 65,536 字节**（超了报 `The job parameters length(69665) exceeds limit(65536)`）。
+  北京 CPFS 上还没有本仓库时，可以把 tar.gz base64 内联进命令送过去（整个仓库约 58KB base64，刚好够）；
+  再大就得先落一次盘，之后只补送单个文件。
+* **0 卡 job 拿不到 NVIDIA 运行时**，见 §3.1。
+
+### 3.5 openpi 的 checkpoint 缓存布局
+
+`openpi.shared.download.maybe_download` 把 `gs://<netloc>/<path>` 缓存到
+`$OPENPI_DATA_HOME/<netloc>/<path>`，即
+`gs://openpi-assets/checkpoints/pi05_libero` → `/mnt/cpfs/PeterX/data/openpi_data/openpi-assets/checkpoints/pi05_libero`。
+预先按这个布局放好文件，`serve_policy --policy.dir gs://...` 会直接命中缓存、不再下载。
 
 ---
 
