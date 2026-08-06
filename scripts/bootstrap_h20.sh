@@ -39,6 +39,13 @@ esac
 test -d "$PETERX" || { echo "  $PETERX 不存在" >&2; exit 1; }
 export UV_CACHE_DIR=${UV_CACHE_DIR:-/mnt/cpfs/uv_cache}
 export MAMBA_ROOT_PREFIX=$PETERX/tools/mamba
+# openpi requires python 3.11 (.python-version) while the DLC image ships 3.12,
+# so uv downloads a managed interpreter. Its default location is under $HOME,
+# which in a DLC job is container-local and disappears when the job ends --
+# leaving .venv/bin/python as a dangling symlink that the next job reports as
+# missing. Keep managed interpreters on CPFS so the venv survives.
+export UV_PYTHON_INSTALL_DIR=${UV_PYTHON_INSTALL_DIR:-$PETERX/tools/uv_pythons}
+mkdir -p "$UV_PYTHON_INSTALL_DIR"
 
 step "1. LIBERO-plus @ ${LIBERO_PLUS_COMMIT:0:7}"
 if [[ ! -d "$LIBERO_PLUS_ROOT/.git" ]]; then
@@ -124,8 +131,25 @@ grep -q 'name="pi05_libero"' "$OPENPI_AR/src/openpi/training/config.py" || {
 echo "  pi05_libero 配置存在 ✓"
 
 step "4. openpi 服务端 venv (uv sync, 首次约 15-30 分钟)"
-( cd "$OPENPI_AR" && UV_CACHE_DIR="$UV_CACHE_DIR" uv sync --frozen )
-echo "  $("$OPENPI_AR/.venv/bin/python" -c 'import jax; print("jax", jax.__version__, jax.devices())' 2>&1 | tail -1)"
+# A venv left behind by a job whose managed interpreter lived in the ephemeral
+# $HOME has a dangling bin/python. uv will not necessarily repair that, so drop
+# it and rebuild rather than syncing on top of a broken base.
+if [[ -e "$OPENPI_AR/.venv" ]] && ! "$OPENPI_AR/.venv/bin/python" -c '' 2>/dev/null; then
+    echo "  已有的 .venv 里 python 跑不起来（解释器多半已随上一个 job 消失），重建"
+    rm -rf "$OPENPI_AR/.venv"
+fi
+( cd "$OPENPI_AR" && uv sync --frozen )
+# Assert the interpreter actually runs. `[ -d .venv ]` is not enough: a venv whose
+# base interpreter lived in the job's ephemeral $HOME leaves a dangling symlink
+# that looks like a directory full of files but cannot execute anything.
+if ! "$OPENPI_AR/.venv/bin/python" -c 'import sys; print("  python", sys.version.split()[0])'; then
+    echo "  .venv 里的 python 跑不起来（多半是解释器落在了 job 本地的 \$HOME）" >&2
+    echo "  UV_PYTHON_INSTALL_DIR=$UV_PYTHON_INSTALL_DIR" >&2
+    ls -la "$OPENPI_AR/.venv/bin/python" >&2 || true
+    exit 1
+fi
+echo "  $("$OPENPI_AR/.venv/bin/python" -c 'import jax; print("jax", jax.__version__)' 2>&1 | tail -1)"
+echo "  $("$OPENPI_AR/.venv/bin/python" -c 'import openpi; print("openpi import OK")' 2>&1 | tail -1)"
 
 step "5. 评测环境 py3.8 + ImageMagick"
 if [[ ! -x "$EVAL_ENV/bin/python" ]]; then

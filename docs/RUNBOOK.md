@@ -130,14 +130,27 @@ mujoco 析构器的已知噪音，不影响结果。
 OSS 输出目录。** 发布只用整文件复制，绝不 link/move 进 ossfs。
 断点续跑读的是 CPFS 上的工作目录，所以跨 job 重启也有效。
 
-### 3.5 DLC 提交的两个硬限制
+### 3.5 uv 的托管 Python 必须落在 CPFS
+
+openpi 的 `.python-version` 要 **3.11**，而 DLC 镜像自带 3.12，所以 `uv sync` 会下载一个
+托管解释器。默认装到 `$HOME/.local/share/uv/python` —— **DLC job 里的 `$HOME` 是容器本地的，
+job 一结束就没了**，留下 `.venv/bin/python` 指向不存在的路径。下一个 job 看到的现象是：
+`.venv/` 目录在、里面文件齐全，但 `[ -e .venv/bin/python ]` 为假（悬空链接）。
+
+```bash
+export UV_PYTHON_INSTALL_DIR=/mnt/cpfs/PeterX/tools/uv_pythons   # 必须
+```
+
+**检查 venv 是否可用要执行它，不能只看目录在不在**：`.venv/bin/python -c ''`。
+
+### 3.6 DLC 提交的两个硬限制
 
 * **UserCommand 上限 65,536 字节**（超了报 `The job parameters length(69665) exceeds limit(65536)`）。
   北京 CPFS 上还没有本仓库时，可以把 tar.gz base64 内联进命令送过去（整个仓库约 58KB base64，刚好够）；
   再大就得先落一次盘，之后只补送单个文件。
 * **0 卡 job 拿不到 NVIDIA 运行时**，见 §3.1。
 
-### 3.6 openpi 的 checkpoint 缓存布局
+### 3.7 openpi 的 checkpoint 缓存布局
 
 `openpi.shared.download.maybe_download` 把 `gs://<netloc>/<path>` 缓存到
 `$OPENPI_DATA_HOME/<netloc>/<path>`，即
