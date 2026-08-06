@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+smoke_out/
+splits/shards/
+*.tmp
