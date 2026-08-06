@@ -24,6 +24,7 @@ EVAL_ENV=$PETERX/env/libero-plus-eval-py38
 REPO=$PETERX/repos/libero-plus-eval
 MICROMAMBA=$PETERX/tools/mamba/micromamba
 ASSETS_URL=https://huggingface.co/datasets/Sylvest/LIBERO-plus/resolve/main/assets.zip
+ASSETS_BYTES=6395849578
 ASSETS_PREFIX=inspire/hdd/project/embodied-multimodality/public/syfei/libero_new/release/dataset/LIBERO-plus-0/assets
 
 step() { printf '\n\033[1m>>> %s\033[0m\n' "$*"; }
@@ -54,10 +55,38 @@ if [[ -e "$assets_link" && -d "$assets_link/textures" ]]; then
 else
     zip=$PETERX/data/libero_plus/assets.zip
     mkdir -p "$(dirname "$zip")"
-    if [[ ! -s "$zip" ]]; then
-        echo "  下载 $ASSETS_URL"
-        curl -fL --retry 5 --retry-delay 10 -C - -o "$zip" "$ASSETS_URL"
+    have=$( [[ -f "$zip" ]] && stat -c %s "$zip" || echo 0 )
+    if [[ "$have" != "$ASSETS_BYTES" ]]; then
+        # huggingface.co only issues a 302 to a CloudFront/Xet host; a plain
+        # `curl -L` that cannot reach that host silently writes the 1042-byte
+        # redirect body instead. Prefer huggingface_hub, which speaks Xet, and
+        # always verify the byte count before trusting the file.
+        echo "  下载 assets.zip (本地 $have B, 期望 $ASSETS_BYTES B)"
+        rm -f "$zip"
+        if command -v uv >/dev/null && uv venv --python 3.11 /tmp/hfdl >/dev/null 2>&1 && \
+           uv pip install --python /tmp/hfdl/bin/python \
+                --default-index https://mirrors.aliyun.com/pypi/simple/ \
+                "huggingface_hub[hf_xet]" >/dev/null 2>&1; then
+            /tmp/hfdl/bin/python - "$zip" <<'PY' || true
+import shutil, sys
+from huggingface_hub import hf_hub_download
+path = hf_hub_download("Sylvest/LIBERO-plus", "assets.zip", repo_type="dataset")
+shutil.copyfile(path, sys.argv[1])
+print("  huggingface_hub 下载完成")
+PY
+        fi
+        if [[ ! -f "$zip" || "$(stat -c %s "$zip")" != "$ASSETS_BYTES" ]]; then
+            echo "  huggingface_hub 未拿到完整文件，退回 curl"
+            curl -fL --retry 5 --retry-delay 10 -o "$zip" "$ASSETS_URL"
+        fi
     fi
+    got=$(stat -c %s "$zip")
+    if [[ "$got" != "$ASSETS_BYTES" ]]; then
+        echo "  assets.zip 大小不对: 拿到 $got, 期望 $ASSETS_BYTES" >&2
+        echo "  （$got 约等于 1042 说明只收到了 HF 的 302 重定向体，CDN 主机不可达）" >&2
+        exit 1
+    fi
+    echo "  assets.zip 校验通过 ($got B)"
     echo "  解压 -> $LIBERO_PLUS_ROOT/libero/libero/"
     unzip -q -o "$zip" -d "$LIBERO_PLUS_ROOT/libero/libero/"
     ln -sfn "$LIBERO_PLUS_ROOT/libero/libero/$ASSETS_PREFIX" "$assets_link"
