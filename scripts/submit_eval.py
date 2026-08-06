@@ -67,7 +67,11 @@ def build_command(args, split_path: str, shard_index: int, shard_out: str) -> st
         f"{env_assignments} bash {shlex.quote(args.repo)}/scripts/run_eval.sh "
         f"{shlex.quote(split_path)} {shlex.quote(shard_out)}"
     )
-    return " && ".join(["set -euo pipefail", *checks, run])
+    # DLC runs UserCommand under /bin/sh (dash), which rejects `-o pipefail`
+    # ("Illegal option -o pipefail") and kills the job before anything starts.
+    # The command is a plain && chain, so `set -eu` is all it needs; run_eval.sh
+    # itself is invoked through bash and keeps its own `set -euo pipefail`.
+    return " && ".join(["set -eu", *checks, run])
 
 
 def main() -> int:

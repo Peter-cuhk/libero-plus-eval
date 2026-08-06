@@ -149,6 +149,9 @@ export UV_PYTHON_INSTALL_DIR=/mnt/cpfs/PeterX/tools/uv_pythons   # 必须
   北京 CPFS 上还没有本仓库时，可以把 tar.gz base64 内联进命令送过去（整个仓库约 58KB base64，刚好够）；
   再大就得先落一次盘，之后只补送单个文件。
 * **0 卡 job 拿不到 NVIDIA 运行时**，见 §3.1。
+* **UserCommand 是 `/bin/sh`（dash）执行的，不是 bash。** 命令开头写 `set -euo pipefail`
+  会直接 `Illegal option -o pipefail` 并让 job 秒失败。要么用 POSIX 的 `set -eu`，
+  要么把脚本投递到文件里再用 `bash` 跑（本仓库两种都用到了）。
 
 ### 3.7 openpi 的 checkpoint 缓存布局
 
