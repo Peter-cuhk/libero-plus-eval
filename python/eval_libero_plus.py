@@ -19,6 +19,7 @@ import dataclasses
 import io
 import json
 import logging
+import math
 import multiprocessing
 import os
 import pathlib
@@ -51,7 +52,14 @@ class EvalConfig:
 
 
 def _quat2axisangle(quat):
-    """Copied from robosuite transform_utils (via openpi examples/libero)."""
+    """Copied from robosuite transform_utils, via openpi examples/libero.
+
+    Kept identical to openpi's version down to `math.isclose(den, 0.0)` (whose
+    default abs_tol of 0 makes it an exact-zero test) so the state vector fed to
+    the policy matches the one the published pi05_libero numbers were produced
+    with. The only deviation is copying the array instead of clipping the
+    observation in place.
+    """
     import numpy as np
 
     quat = np.asarray(quat, dtype=float).copy()
@@ -59,10 +67,13 @@ def _quat2axisangle(quat):
         quat[3] = 1.0
     elif quat[3] < -1.0:
         quat[3] = -1.0
+
     den = np.sqrt(1.0 - quat[3] * quat[3])
-    if abs(den) < 1e-8:
+    if math.isclose(den, 0.0):
+        # This is (close to) a zero degree rotation, immediately return
         return np.zeros(3)
-    return (quat[:3] * 2.0 * np.arccos(quat[3])) / den
+
+    return (quat[:3] * 2.0 * math.acos(quat[3])) / den
 
 
 _BENCHMARK_CACHE: dict = {}
