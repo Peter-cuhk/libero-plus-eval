@@ -57,16 +57,71 @@ LIBERO-plus 的扰动已经把 init state 编进任务名，每个任务只有 1
 
 | 坑 | 症状 | 处理 |
 |---|---|---|
-| **ImageMagick** | `import libero...env_wrapper` 直接失败 | `env_wrapper.py:15` 在模块层 `from wand.api import library`。装 `libmagickwand-dev`（DLC 里 apt）或走 conda-forge。**所有维度都需要，不只是 Sensor Noise** |
-| **opencv GUI 版** | 无头环境里 import 拉 `libGLX` 失败 | LIBERO 钉的是 `opencv-python==4.6.0.66`，装完要换成 `opencv-python-headless==4.6.0.66` |
-| **EGL vendor 清单** | `MUJOCO_GL=egl` 找不到驱动 | CUDA 镜像不一定有 `/usr/share/glvnd/egl_vendor.d/`。`run_eval.sh` 自己写一个 `10_nvidia.json` 并用 `__EGL_VENDOR_LIBRARY_FILENAMES` 指过去 |
-| **glib 系列 .so** | `libgthread-2.0.so.0` 找不到 | 用 `EXTRA_LIB_DIR` 指到一个含这些 .so 的目录，`run_eval.sh` 会软链进 `LD_LIBRARY_PATH` |
-| **python 版本** | 依赖解析失败 | LIBERO 钉 `numpy==1.22.4` / `transformers==4.21.1`，跟着 openpi 的做法用 **py3.8** |
+| **ImageMagick** | `import libero...env_wrapper` 直接失败 | `env_wrapper.py:15` 在模块层 `from wand.api import library`。**所有维度都需要，不只是 Sensor Noise**。用 micromamba 装进评测 prefix（不动系统 apt），运行时设 `MAGICK_HOME=<prefix>` |
+| **glib 系列 .so** | `libgthread-2.0.so.0` 找不到 | DLC 镜像里没有。同一个 conda prefix 的 `lib/` 就带了 `libglib-2.0.so.0` / `libgthread-2.0.so.0`，把它加进 `LD_LIBRARY_PATH` 即可，不用额外找 |
+| **opencv GUI 版** | 无头环境里 import 拉 `libGLX` 失败 | LIBERO 钉的是 `opencv-python==4.6.0.66`，要换成 `opencv-python-headless==4.6.0.66` |
+| **EGL vendor 清单** | `MUJOCO_GL=egl` 枚举到 0 个设备 | 见 §3.2。`run_eval.sh` 自动生成 `10_nvidia.json` 并用 `__EGL_VENDOR_LIBRARY_FILENAMES` 指过去 |
+| **robomimic → torchvision** | `Failed to build torchvision==0.25.0+v0.1.0.ppu2.1.0` | 集群内部 pypi 镜像里有 PPU 专用的 torchvision 源码包，构建时找不到 torch 就炸。`robomimic` 只被 `libero/lifelong` 用到，**评测不需要，直接不装** |
+| **`bddl` 缺 `future`** | `ModuleNotFoundError: No module named 'future'` | `bddl/backend_abc.py` 导入 `future.utils` 但没声明依赖，要手动装 `future==0.18.2` |
+| **内部 pypi 镜像没有 cp38 的 torch** | `no version of torch==1.11.0` | 集群默认索引 `aiext-pypi.mirrors.aliyuncs.com` 一个 cp38 torch wheel 都没有。装依赖时用 `--default-index https://mirrors.aliyun.com/pypi/simple/` |
+| **python 版本** | 依赖解析失败 | LIBERO 钉 `numpy==1.22.4`，跟着 openpi 的做法用 **py3.8** |
 | **`uv run` 挂死** | 命令无输出、几分钟后超时 | 没 `source /mnt/cpfs/PeterX/env/env.sh` 时 uv 会走 pypi.org。**先 source 再跑任何 `uv run`** |
 
 ---
 
-## 三、PPU 侧为什么不能评测（实测）
+## 三、北京 H20 侧的实测事实
+
+探测 job：`dlcrzmz9mv5h7ats`（0 卡）、`dlcoe0op6ptpeu6g`（1 卡）、`dlc1pki9zen2ygzj`（EGL 修复验证）。
+
+### 3.1 **0 卡 job 探不出渲染栈**
+
+`--gpu 0` 的容器不会注入 NVIDIA 运行时，`libEGL*` / `libGL*` / `nvidia-smi` 全部显示缺失。
+**任何关于 EGL 的结论都必须用 `--gpu >= 1` 的 job 得出**，否则是假阴性。
+
+### 3.2 EGL：有驱动，但没有 ICD 清单
+
+1 卡 job 上：
+
+```
+nvidia-smi        NVIDIA H20-3e, 143771 MiB, driver 570.133.20
+libEGL.so.1       /usr/lib/x86_64-linux-gnu/libEGL.so.1          ✓
+libEGL_nvidia     libEGL_nvidia.so.0 / .570.133.20               ✓
+egl_vendor.d      MISSING                                        ✗ ← 病根
+/dev/dri          MISSING（EGL device platform 不需要它）
+libglib/libgthread MISSING（评测环境的 conda prefix 提供）
+```
+
+没有 ICD 清单时，libEGL 枚举到 **0 个设备**，报错：
+
+```
+RuntimeError: The MUJOCO_EGL_DEVICE_ID environment variable must be an integer
+between 0 and -1 (inclusive), got 0.
+```
+
+补上清单后**实测渲染成功**（`shape=(128,128,3) mean=135.3 std=75.9`）：
+
+```bash
+printf '{"file_format_version":"1.0.0","ICD":{"library_path":"libEGL_nvidia.so.0"}}\n' > 10_nvidia.json
+export __EGL_VENDOR_LIBRARY_FILENAMES=$PWD/10_nvidia.json MUJOCO_GL=egl MUJOCO_EGL_DEVICE_ID=0
+```
+
+`run_eval.sh` 会自动生成这个清单。程序退出时 `EGLError: <exception str() failed>` 是
+mujoco 析构器的已知噪音，不影响结果。
+
+### 3.3 网络与存储
+
+| 项 | 结论 |
+|---|---|
+| `github.com` / `huggingface.co` | http=200，**直连可达** → LIBERO-plus 与 assets 在北京直接下，不必跨区搬 |
+| `storage.googleapis.com` | http=400（无 bucket 的正常应答，不是超时）→ `gs://openpi-assets` 大概率可直取 |
+| `/mnt/cpfs/PeterX` | 已存在（policy/openpi-icl、env、data、tools/mamba 都在），10T 盘剩 1.5T |
+| `/mnt/oss/PeterX` | 可写，512T |
+| `apt-get install libmagickwand-dev` | 容器里可用（装的是 ImageMagick 6.9）。但我们走 conda 的 IM7，两个 region 保持一致 |
+| micromamba / conda | 镜像里没有；用 CPFS 上的 `tools/mamba/micromamba` |
+
+---
+
+## 四、PPU 侧为什么不能评测（实测）
 
 ```
 /usr/lib/x86_64-linux-gnu/libEGL*        → 不存在
@@ -80,7 +135,7 @@ repos/openpi-icl/.venv 的 jax.devices()  → [CpuDevice(id=0)]
 
 ---
 
-## 四、成绩口径
+## 五、成绩口径
 
 * **overall 用 micro**（总成功数 / 总 episode 数）。七维任务数天然不等
   （Noise 1601 / Camera 1599 / Robot 1550 / Language 1537 / Layout 1525 / Light 1142 / Background 1076），
@@ -93,10 +148,14 @@ repos/openpi-icl/.venv 的 jax.devices()  → [CpuDevice(id=0)]
 
 ---
 
-## 五、已验证的事实（可以直接引用）
+## 六、已验证的事实（可以直接引用）
 
 * LIBERO-plus @ `4976dc3`：spatial 2402 + object 2518 + goal 2591 + libero_10 2519 = **10,030**。
 * `benchmark_dict[suite]()` 的 0-based `task_id` **精确对应** `task_classification.json[suite][task_id]`
   （`task_order_index=0` 是恒等序，10,030 条 name 零错位）。七维统计靠这个映射。
   `libero_plus_common.check_alignment()` 每次运行都会重新验证，不依赖这份记录。
 * assets.zip 解压后 **448,799 个文件 / 8.3GiB**，与 zip 内条目数完全一致。
+* **PPU 本机 OSMesa 冒烟：14/14 通过**（七维各 2 个 task，`smoke_env.py`）。
+  Camera Viewpoints 出图确为偏移视角，Sensor Noise 出图确有 wand 施加的模糊/退化，
+  说明 `_view_/_initstate_/_noise_/_language_/_table_/_light_/_add_` 全部分支与
+  `MountedPandaN` 变体机器人都工作正常。import 一次约 13 秒（模块层解析 1,537 个 language bddl）。

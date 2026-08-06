@@ -50,11 +50,19 @@ def main() -> int:
         action="store_true",
         help="Report anyway when episodes are missing. Result is NOT ledger-eligible.",
     )
+    parser.add_argument(
+        "--no-categories",
+        action="store_true",
+        help="Plain LIBERO regression: no task_classification.json, so report overall + per-suite only",
+    )
     args = parser.parse_args()
 
-    root = pathlib.Path(args.benchmark_root) if args.benchmark_root else common.libero_plus_root()
-    classification = common.load_task_classification(root)
-    common.check_alignment(classification, root)
+    if args.no_categories:
+        classification = None
+    else:
+        root = pathlib.Path(args.benchmark_root) if args.benchmark_root else common.libero_plus_root()
+        classification = common.load_task_classification(root)
+        common.check_alignment(classification, root)
 
     expected_shard = common.load_shard(args.split)
     expected_keys = {(suite, task_id) for suite in common.SUITES for task_id in expected_shard[suite]}
@@ -91,9 +99,10 @@ def main() -> int:
         )
 
     lookup = {}
-    for suite in common.SUITES:
-        for index, record in enumerate(classification[suite]):
-            lookup[(suite, index)] = record
+    if classification is not None:
+        for suite in common.SUITES:
+            for index, record in enumerate(classification[suite]):
+                lookup[(suite, index)] = record
 
     by_category = collections.defaultdict(lambda: [0, 0])
     by_suite = collections.defaultdict(lambda: [0, 0])
@@ -101,16 +110,15 @@ def main() -> int:
     total = [0, 0]
     for episode in episodes:
         record = lookup.get((episode["suite"], episode["task_id"]))
-        if record is None:
+        if record is None and classification is not None:
             continue
         hit = int(bool(episode["success"]))
-        for bucket in (
-            by_category[record["category"]],
-            by_suite[episode["suite"]],
+        buckets = [by_suite[episode["suite"]], total]
+        if record is not None:
+            buckets.append(by_category[record["category"]])
             # ~121 of the 10,030 tasks carry no difficulty label.
-            by_difficulty[record.get("difficulty_level") or "unlabeled"],
-            total,
-        ):
+            buckets.append(by_difficulty[record.get("difficulty_level") or "unlabeled"])
+        for bucket in buckets:
             bucket[0] += hit
             bucket[1] += 1
 
@@ -118,29 +126,35 @@ def main() -> int:
         return 100.0 * bucket[0] / bucket[1] if bucket[1] else float("nan")
 
     micro = rate(total)
-    macro = sum(rate(by_category[c]) for c in common.CATEGORIES if by_category[c][1]) / max(
-        1, sum(1 for c in common.CATEGORIES if by_category[c][1])
-    )
+    scored_categories = [c for c in common.CATEGORIES if by_category[c][1]]
+    macro = sum(rate(by_category[c]) for c in scored_categories) / len(scored_categories) if scored_categories else micro
 
+    title = "净版 LIBERO 回归报告" if args.no_categories else "LIBERO-plus 评测报告"
     lines = []
-    lines.append(f"# LIBERO-plus 评测报告{(' — ' + args.exp_id) if args.exp_id else ''}\n")
+    lines.append(f"# {title}{(' — ' + args.exp_id) if args.exp_id else ''}\n")
     lines.append(f"- split: `{args.split}`")
     lines.append(f"- run_dir: `{run_dir}`")
-    lines.append(f"- episodes: **{total[1]}** (expected {len(expected_keys)}), errored {len(errored)}")
+    trials_per_task = total[1] / len(got_keys) if got_keys else 0
+    lines.append(
+        f"- tasks: **{len(got_keys)} / {len(expected_keys)}** expected; "
+        f"episodes: **{total[1]}** ({trials_per_task:.0f} trial/task), errored {len(errored)}"
+    )
     lines.append(f"- **overall (micro) = {micro:.2f}%**  ±{wilson_halfwidth(*total):.2f}pt (95% Wilson)")
-    lines.append(f"- overall (macro over 7 dims) = {macro:.2f}%")
+    if scored_categories:
+        lines.append(f"- overall (macro over 7 dims) = {macro:.2f}%")
     if incomplete:
         lines.append("\n> ⚠️ **不完整/不一致的运行，此数字不得进台账。**")
-    lines.append("\n## 七维\n")
-    lines.append("| 维度 | 成功 | 总数 | 成功率 | ±95% |")
-    lines.append("|---|---:|---:|---:|---:|")
-    for category in common.CATEGORIES:
-        bucket = by_category[category]
-        if not bucket[1]:
-            continue
-        lines.append(
-            f"| {category} | {bucket[0]} | {bucket[1]} | {rate(bucket):.2f}% | ±{wilson_halfwidth(*bucket):.2f} |"
-        )
+    if scored_categories:
+        lines.append("\n## 七维\n")
+        lines.append("| 维度 | 成功 | 总数 | 成功率 | ±95% |")
+        lines.append("|---|---:|---:|---:|---:|")
+        for category in common.CATEGORIES:
+            bucket = by_category[category]
+            if not bucket[1]:
+                continue
+            lines.append(
+                f"| {category} | {bucket[0]} | {bucket[1]} | {rate(bucket):.2f}% | ±{wilson_halfwidth(*bucket):.2f} |"
+            )
     lines.append("\n## 按 suite\n")
     lines.append("| suite | 成功 | 总数 | 成功率 |")
     lines.append("|---|---:|---:|---:|")
@@ -148,21 +162,23 @@ def main() -> int:
         bucket = by_suite[suite]
         if bucket[1]:
             lines.append(f"| {suite} | {bucket[0]} | {bucket[1]} | {rate(bucket):.2f}% |")
-    lines.append("\n## 按难度\n")
-    lines.append("| level | 成功 | 总数 | 成功率 |")
-    lines.append("|---|---:|---:|---:|")
-    for level in sorted(by_difficulty, key=lambda x: (isinstance(x, str), x)):
-        bucket = by_difficulty[level]
-        label = level if isinstance(level, str) else f"L{level}"
-        lines.append(f"| {label} | {bucket[0]} | {bucket[1]} | {rate(bucket):.2f}% |")
+    if by_difficulty:
+        lines.append("\n## 按难度\n")
+        lines.append("| level | 成功 | 总数 | 成功率 |")
+        lines.append("|---|---:|---:|---:|")
+        for level in sorted(by_difficulty, key=lambda x: (isinstance(x, str), x)):
+            bucket = by_difficulty[level]
+            label = level if isinstance(level, str) else f"L{level}"
+            lines.append(f"| {label} | {bucket[0]} | {bucket[1]} | {rate(bucket):.2f}% |")
 
-    csv_order = ["Objects Layout", "Camera Viewpoints", "Robot Initial States", "Language Instructions",
-                 "Light Conditions", "Background Textures", "Sensor Noise"]
-    csv_cells = ",".join(f"{rate(by_category[c]):.2f}" if by_category[c][1] else "" for c in csv_order)
     lines.append("\n## EXPERIMENTS.csv 片段\n")
-    lines.append("`layout,camera,robot_init,language,light,background,noise` 七列：\n")
-    lines.append(f"```\n{csv_cells}\n```")
-    lines.append(f"\noverall（micro）= `{micro:.2f}`\n")
+    if scored_categories:
+        csv_order = ["Objects Layout", "Camera Viewpoints", "Robot Initial States", "Language Instructions",
+                     "Light Conditions", "Background Textures", "Sensor Noise"]
+        csv_cells = ",".join(f"{rate(by_category[c]):.2f}" if by_category[c][1] else "" for c in csv_order)
+        lines.append("`layout,camera,robot_init,language,light,background,noise` 七列：\n")
+        lines.append(f"```\n{csv_cells}\n```")
+    lines.append(f"\noverall（micro）= `{micro:.2f}`" + ("  → `clean_libero` 列\n" if args.no_categories else "\n"))
 
     report = "\n".join(lines) + "\n"
     out_dir = pathlib.Path(args.out) if args.out else run_dir

@@ -1,0 +1,103 @@
+{
+  "libero_spatial": [
+    1349,
+    2128
+  ],
+  "libero_object": [
+    260,
+    1629,
+    2005,
+    2457
+  ],
+  "libero_goal": [
+    139,
+    589,
+    902,
+    1424,
+    2029
+  ],
+  "libero_10": [
+    216,
+    863,
+    1754
+  ],
+  "_meta": {
+    "seed": 20260806,
+    "per_category": 2,
+    "total": 14,
+    "libero_plus_commit": "4976dc3",
+    "stats": {
+      "Objects Layout": {
+        "pool": 1525,
+        "selected": 2,
+        "per_suite": {
+          "libero_spatial": 0,
+          "libero_object": 1,
+          "libero_goal": 1,
+          "libero_10": 0
+        }
+      },
+      "Camera Viewpoints": {
+        "pool": 1599,
+        "selected": 2,
+        "per_suite": {
+          "libero_spatial": 0,
+          "libero_object": 0,
+          "libero_goal": 1,
+          "libero_10": 1
+        }
+      },
+      "Robot Initial States": {
+        "pool": 1550,
+        "selected": 2,
+        "per_suite": {
+          "libero_spatial": 0,
+          "libero_object": 1,
+          "libero_goal": 1,
+          "libero_10": 0
+        }
+      },
+      "Language Instructions": {
+        "pool": 1537,
+        "selected": 2,
+        "per_suite": {
+          "libero_spatial": 1,
+          "libero_object": 0,
+          "libero_goal": 1,
+          "libero_10": 0
+        }
+      },
+      "Light Conditions": {
+        "pool": 1142,
+        "selected": 2,
+        "per_suite": {
+          "libero_spatial": 1,
+          "libero_object": 1,
+          "libero_goal": 0,
+          "libero_10": 0
+        }
+      },
+      "Background Textures": {
+        "pool": 1076,
+        "selected": 2,
+        "per_suite": {
+          "libero_spatial": 0,
+          "libero_object": 0,
+          "libero_goal": 1,
+          "libero_10": 1
+        }
+      },
+      "Sensor Noise": {
+        "pool": 1601,
+        "selected": 2,
+        "per_suite": {
+          "libero_spatial": 0,
+          "libero_object": 1,
+          "libero_goal": 0,
+          "libero_10": 1
+        }
+      }
+    },
+    "note": "FROZEN. Regenerating with the same seed/per_category reproduces this file."
+  }
+}
