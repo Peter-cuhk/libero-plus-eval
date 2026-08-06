@@ -32,6 +32,10 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 : "${SEED:=7}"
 : "${SAVE_VIDEOS:=12}"
 : "${RESUME:=1}"
+# Each job slices the committed split itself rather than reading a shard file
+# that would have to be shipped across regions.
+: "${SHARD_INDEX:=0}"
+: "${NUM_SHARDS:=1}"
 
 # --- where things live ------------------------------------------------------
 : "${LIBERO_PLUS_ROOT:=/mnt/cpfs/PeterX/repos/LIBERO-plus}"
@@ -123,7 +127,7 @@ fi
 echo "=== LIBERO-plus eval ==="
 echo "  benchmark    : $BENCHMARK ($benchmark_root)"
 echo "  config/ckpt  : $CONFIG_NAME  <-  $CHECKPOINT_DIR"
-echo "  shard        : $shard_file"
+echo "  split        : $shard_file  (shard $SHARD_INDEX/$NUM_SHARDS)"
 echo "  output       : $output_dir"
 echo "  trials/task  : $NUM_TRIALS_PER_TASK   workers: $NUM_WORKERS   seed: $SEED"
 echo "  renderer     : $MUJOCO_GL_BACKEND"
@@ -172,6 +176,8 @@ echo "policy server ready on :$SERVER_PORT (pid $server_pid)"
 # ---------------------------------------------------------------------- client
 client_args=(
     --shard-file "$shard_file"
+    --shard-index "$SHARD_INDEX"
+    --num-shards "$NUM_SHARDS"
     --out "$output_dir"
     --host 127.0.0.1
     --port "$SERVER_PORT"

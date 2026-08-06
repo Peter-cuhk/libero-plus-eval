@@ -28,12 +28,12 @@ PAI_TOOLKIT = "/mnt/cpfs/PeterX/skills/pai-toolkit"
 DEFAULT_REPO = "/mnt/cpfs/PeterX/repos/libero-plus-eval"
 
 
-def build_command(args, shard_path: str, shard_out: str) -> str:
+def build_command(args, split_path: str, shard_index: int, shard_out: str) -> str:
     """The shell command the DLC job runs. Preconditions first, then the shard."""
     checks = [
         f"test -d {shlex.quote(args.benchmark_root)} || {{ echo 'MISSING benchmark: {args.benchmark_root}'; exit 1; }}",
         f"test -x {shlex.quote(args.eval_python)} || {{ echo 'MISSING eval venv: {args.eval_python}'; exit 1; }}",
-        f"test -f {shlex.quote(shard_path)} || {{ echo 'MISSING shard file: {shard_path}'; exit 1; }}",
+        f"test -f {shlex.quote(split_path)} || {{ echo 'MISSING split file: {split_path}'; exit 1; }}",
     ]
     if not args.ckpt.startswith("gs://"):
         checks.append(
@@ -58,12 +58,14 @@ def build_command(args, shard_path: str, shard_out: str) -> str:
             ("EVAL_PYTHON", args.eval_python),
             ("NUM_WORKERS", str(args.num_workers)),
             ("SEED", str(args.seed)),
+            ("SHARD_INDEX", str(shard_index)),
+            ("NUM_SHARDS", str(args.shards)),
         ]
         + ([("NUM_TRIALS_PER_TASK", str(args.num_trials_per_task))] if args.num_trials_per_task else [])
     )
     run = (
         f"{env_assignments} bash {shlex.quote(args.repo)}/scripts/run_eval.sh "
-        f"{shlex.quote(shard_path)} {shlex.quote(shard_out)}"
+        f"{shlex.quote(split_path)} {shlex.quote(shard_out)}"
     )
     return " && ".join(["set -euo pipefail", *checks, run])
 
@@ -82,7 +84,6 @@ def main() -> int:
     parser.add_argument("--openpi-repo", default="/mnt/cpfs/PeterX/policy/openpi-ar")
     parser.add_argument("--eval-python", default="/mnt/cpfs/PeterX/env/libero-plus-eval-py38/bin/python")
     parser.add_argument("--repo", default=DEFAULT_REPO, help="libero-plus-eval checkout on the Beijing CPFS")
-    parser.add_argument("--shard-dir", default="", help="Where shard json files live (default: <repo>/splits/shards/<exp>)")
     parser.add_argument("--num-workers", type=int, default=16)
     parser.add_argument("--num-trials-per-task", type=int, default=0, help="0 = protocol default (plus:1, clean:50)")
     parser.add_argument("--seed", type=int, default=7)
@@ -91,29 +92,25 @@ def main() -> int:
     parser.add_argument("--memory", default="128Gi")
     parser.add_argument("--template", default="jobs/h20/debug-1gpu.yaml")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--write-shards-only", action="store_true", help="Generate shard files and print commands, submit nothing")
+    parser.add_argument("--print-only", "--write-shards-only", dest="print_only", action="store_true",
+                        help="Print the job commands and submit nothing")
     args = parser.parse_args()
 
-    repo_local = pathlib.Path(__file__).resolve().parent.parent
-    shard_dir_local = pathlib.Path(args.shard_dir) if args.shard_dir else repo_local / "splits" / "shards" / args.exp
-    shard_dir_remote = args.shard_dir if args.shard_dir else f"{args.repo}/splits/shards/{args.exp}"
-
+    # The split file is committed and present in both regions, and slicing is
+    # deterministic, so each job derives its own slice. Nothing per-job needs to
+    # be written here -- the two CPFS filesystems are not shared, so a shard file
+    # written next to this script would simply not exist where the job runs.
     split = common.load_shard(args.split)
     pieces = make_shards.make_shards(split, args.shards)
-    for index, piece in enumerate(pieces):
-        payload = dict(piece)
-        payload["_meta"] = {"source_split": str(args.split), "shard": index, "num_shards": args.shards, "exp": args.exp}
-        common.write_json(shard_dir_local / f"shard_{index:02d}.json", payload)
-    print(f"wrote {args.shards} shard files to {shard_dir_local} ({common.shard_size(split)} tasks total)")
+    split_remote = args.split
+    if not split_remote.startswith("/"):
+        split_remote = f"{args.repo}/{split_remote}"
+    print(f"split {args.split} -> {split_remote} ({common.shard_size(split)} tasks over {args.shards} shard(s))")
 
     commands = []
     for index, piece in enumerate(pieces):
         name = f"{args.exp}-s{index:02d}"[:60]
-        command = build_command(
-            args,
-            f"{shard_dir_remote}/shard_{index:02d}.json",
-            f"{args.out}/shard_{index:02d}",
-        )
+        command = build_command(args, split_remote, index, f"{args.out}/shard_{index:02d}")
         commands.append((name, command, common.shard_size(piece)))
 
     print(f"\n{'=' * 78}")
@@ -122,8 +119,8 @@ def main() -> int:
         print(f"  {command}\n")
     print("=" * 78)
 
-    if args.write_shards_only:
-        print("\n--write-shards-only: nothing submitted")
+    if args.print_only:
+        print("\n--print-only: nothing submitted")
         return 0
 
     env = dict(os.environ)

@@ -27,6 +27,8 @@
 bash scripts/bootstrap_h20.sh
 
 # 1. 分片提交（先 dry-run 核对卡数/路径/镜像）
+#    每个 job 自己从已提交的 split 里按 shard_index 切片——两套 CPFS 不通，
+#    在提交端生成的分片文件在 job 那边根本不存在。
 python scripts/submit_eval.py --split splits/dev_v1.json --shards 4 \
     --exp E101-xiaomi-dynamic --ckpt /mnt/oss/PeterX/outputs/E101-xiaomi-dynamic/checkpoints/.../30000 \
     --out /mnt/oss/PeterX/outputs/E101-xiaomi-dynamic/eval/dev-20260806 --dry-run
@@ -44,6 +46,9 @@ python python/aggregate.py --run-dir /mnt/oss/PeterX/outputs/E101-xiaomi-dynamic
 python/libero_plus_common.py   共享常量与校验（suite/维度/步数预算/split IO）
 python/eval_libero_plus.py     评测客户端：分片、逐 episode JSONL、断点续跑
 python/smoke_env.py            不接策略的环境冒烟（可在 CPU/OSMesa 上跑）
+python/validate_envs.py        全量 10,030 个环境的构造检查
+python/stub_policy_server.py   桩策略服务器，用于无 GPU 时验证客户端链路
+python/fetch_gcs_checkpoint.py GCS checkpoint 并行预下载
 python/make_dev_split.py       生成冻结的 dev split
 python/make_shards.py          split → N 个均衡分片
 python/aggregate.py            分片 → 七维表 + overall + EXPERIMENTS.csv 片段

@@ -30,6 +30,7 @@ from typing import List, Optional, Tuple
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import libero_plus_common as common  # noqa: E402
+import make_shards  # noqa: E402
 
 LIBERO_DUMMY_ACTION = [0.0] * 6 + [-1.0]
 LIBERO_ENV_RESOLUTION = 256  # resolution used to render openpi's LIBERO training data
@@ -258,7 +259,14 @@ def build_worklist(shard, done_keys, video_tasks):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--shard-file", required=True, help="JSON {suite: [task_id, ...]}")
+    parser.add_argument("--shard-file", required=True, help="Split/shard JSON {suite: [task_id, ...]}")
+    parser.add_argument(
+        "--shard-index", type=int, default=0,
+        help="Which slice of --shard-file to run. Slicing is deterministic (global_index %% num_shards), "
+             "so every job derives its own slice from the committed split file -- no per-job shard files "
+             "have to be shipped to the other region.",
+    )
+    parser.add_argument("--num-shards", type=int, default=1)
     parser.add_argument("--out", required=True, help="Output directory for episodes.jsonl / summary.json")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
@@ -291,6 +299,15 @@ def main() -> int:
         logging.info("task_id <-> category alignment verified for all %d tasks", common.EXPECTED_TOTAL)
 
     shard = common.load_shard(args.shard_file)
+    if args.num_shards > 1:
+        if not 0 <= args.shard_index < args.num_shards:
+            raise SystemExit(f"--shard-index must be in [0, {args.num_shards}), got {args.shard_index}")
+        full_size = common.shard_size(shard)
+        shard = make_shards.make_shards(shard, args.num_shards)[args.shard_index]
+        logging.info(
+            "shard %d/%d of %s: %d of %d tasks",
+            args.shard_index, args.num_shards, args.shard_file, common.shard_size(shard), full_size,
+        )
     out_dir = pathlib.Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     episodes_path = out_dir / "episodes.jsonl"
