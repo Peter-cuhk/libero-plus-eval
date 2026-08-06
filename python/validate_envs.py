@@ -110,11 +110,15 @@ def main() -> int:
         shard = {s: list(range(common.EXPECTED_TASK_COUNTS[s])) for s in common.SUITES}
 
     out_path = pathlib.Path(args.out)
+    # Results are appended to a .jsonl as they arrive. A full sweep takes hours;
+    # writing only the summary at the end means a kill loses everything.
+    stream_path = out_path.with_suffix(".jsonl")
     done = {}
-    if args.resume and out_path.is_file():
-        for record in json.loads(out_path.read_text()).get("tasks", []):
+    if args.resume:
+        for record in common.read_episodes(stream_path):
             done[(record["suite"], record["task_id"])] = record
-        logging.info("resume: %d tasks already checked", len(done))
+        if done:
+            logging.info("resume: %d tasks already checked (%s)", len(done), stream_path)
 
     work = [
         (suite, task_id, args.steps, args.resolution)
@@ -126,11 +130,15 @@ def main() -> int:
 
     results = list(done.values())
     started = time.monotonic()
-    failures = 0
+    failures = sum(1 for r in results if not r["ok"])
     if work:
-        with multiprocessing.get_context("spawn").Pool(processes=min(args.workers, len(work))) as pool:
+        stream_path.parent.mkdir(parents=True, exist_ok=True)
+        sink = open(stream_path, "a", buffering=1)
+        pool = multiprocessing.get_context("spawn").Pool(processes=min(args.workers, len(work)))
+        with contextlib.closing(sink), pool:
             for i, record in enumerate(pool.imap_unordered(check_task, work, chunksize=4), start=1):
                 results.append(record)
+                sink.write(json.dumps(record, ensure_ascii=False) + "\n")
                 if not record["ok"]:
                     failures += 1
                     logging.warning(
