@@ -96,13 +96,29 @@ echo "  assets 文件数 = $n_assets (PPU 侧实测 448799)"
 [[ "$n_assets" -ge 448000 ]] || { echo "  assets 不完整" >&2; exit 1; }
 
 step "3. openpi 服务端仓库 @ $OPENPI_COMMIT"
+# GitHub 从北京会间歇性地 TLS 断连（实测 "GnuTLS recv error (-110)"），所以带重试，
+# 并调大 postBuffer。
+git config --global http.postBuffer 524288000 || true
+retry() {
+    local n=0
+    until "$@"; do
+        n=$((n + 1))
+        if [[ $n -ge 4 ]]; then return 1; fi
+        echo "  重试 $n/3: $*"
+        sleep 15
+    done
+}
 if [[ ! -d "$OPENPI_AR/.git" ]]; then
-    git clone --recurse-submodules https://github.com/Physical-Intelligence/openpi.git "$OPENPI_AR"
+    retry git clone https://github.com/Physical-Intelligence/openpi.git "$OPENPI_AR"
 fi
-git -C "$OPENPI_AR" fetch --quiet origin
+retry git -C "$OPENPI_AR" fetch --quiet origin
 git -C "$OPENPI_AR" checkout --quiet "$OPENPI_COMMIT"
-git -C "$OPENPI_AR" submodule update --init --recursive --quiet
+# 只要 third_party/libero（净版回归用）。third_party/aloha 是另一个 submodule，
+# openpi 的依赖里 gym-aloha 走 PyPI，不需要那份源码——它挂掉不该拖垮整个 bootstrap。
+retry git -C "$OPENPI_AR" submodule update --init --quiet third_party/libero || {
+    echo "  third_party/libero 拉不下来，净版 LIBERO 回归会缺 benchmark" >&2; exit 1; }
 echo "  HEAD = $(git -C "$OPENPI_AR" rev-parse --short HEAD)"
+echo "  third_party/libero = $([[ -d "$OPENPI_AR/third_party/libero/libero" ]] && echo OK || echo MISSING)"
 grep -q 'name="pi05_libero"' "$OPENPI_AR/src/openpi/training/config.py" || {
     echo "  这个 openpi 里没有 pi05_libero 配置" >&2; exit 1; }
 echo "  pi05_libero 配置存在 ✓"
