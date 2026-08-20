@@ -55,6 +55,10 @@ def build_command(args, split_path: str, shard_index: int, shard_out: str) -> st
             ("BENCHMARK", args.benchmark),
             ("LIBERO_PLUS_ROOT", args.benchmark_root) if args.benchmark == "plus" else ("LIBERO_CLEAN_ROOT", args.benchmark_root),
             ("OPENPI_REPO", args.openpi_repo),
+            (
+                "PYTHONPATH",
+                f"{args.openpi_repo}:{args.openpi_repo}/src:{args.openpi_repo}/packages/openpi-client/src",
+            ),
             ("EVAL_PYTHON", args.eval_python),
             ("NUM_WORKERS", str(args.num_workers)),
             ("SEED", str(args.seed)),
