@@ -83,6 +83,11 @@ def build_command(args, split_path: str, shard_index: int, shard_out: str) -> st
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--split", required=True, help="Split file, e.g. splits/dev_v1.json")
+    parser.add_argument(
+        "--split-remote",
+        default="",
+        help="Job-side split path when Beijing cannot see the submitter's local path",
+    )
     parser.add_argument("--shards", type=int, required=True)
     parser.add_argument("--exp", required=True, help="Experiment id, e.g. B0b-pi05-libero-official")
     parser.add_argument("--out", required=True, help="Beijing output root, e.g. /mnt/oss/PeterX/outputs/<exp>/eval/full-YYYYMMDD")
@@ -116,7 +121,7 @@ def main() -> int:
     # written next to this script would simply not exist where the job runs.
     split = common.load_shard(args.split)
     pieces = make_shards.make_shards(split, args.shards)
-    split_remote = args.split
+    split_remote = args.split_remote or args.split
     if not split_remote.startswith("/"):
         split_remote = f"{args.repo}/{split_remote}"
     print(f"split {args.split} -> {split_remote} ({common.shard_size(split)} tasks over {args.shards} shard(s))")

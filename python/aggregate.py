@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import json
 import math
 import os
 import pathlib
@@ -66,6 +67,9 @@ def main() -> int:
 
     expected_shard = common.load_shard(args.split)
     expected_keys = {(suite, task_id) for suite in common.SUITES for task_id in expected_shard[suite]}
+    with open(args.split) as split_file:
+        split_payload = json.load(split_file)
+    split_protocol = split_payload.get("_meta", {}).get("protocol", "")
 
     run_dir = pathlib.Path(args.run_dir)
     episodes, sources = collect(run_dir)
@@ -104,15 +108,40 @@ def main() -> int:
             for index, record in enumerate(classification[suite]):
                 lookup[(suite, index)] = record
 
+    weight_lookup = {}
+    if split_protocol == "quick1000_v1":
+        population_strata = collections.Counter()
+        sample_strata = collections.Counter()
+        for suite in common.SUITES:
+            for record in classification[suite]:
+                level = record.get("difficulty_level")
+                population_strata[(suite, record["category"], "unlabeled" if level is None else str(level))] += 1
+            for task_id in expected_shard[suite]:
+                record = classification[suite][task_id]
+                level = record.get("difficulty_level")
+                sample_strata[(suite, record["category"], "unlabeled" if level is None else str(level))] += 1
+        uncovered = set(population_strata) - set(sample_strata)
+        if uncovered:
+            raise SystemExit(f"quick split leaves population strata uncovered: {sorted(uncovered)[:3]}")
+        weight_lookup = {key: population_strata[key] / sample_strata[key] for key in population_strata}
+
     by_category = collections.defaultdict(lambda: [0, 0])
     by_suite = collections.defaultdict(lambda: [0, 0])
     by_difficulty = collections.defaultdict(lambda: [0, 0])
     total = [0, 0]
+    weighted_total = [0.0, 0.0]
     for episode in episodes:
         record = lookup.get((episode["suite"], episode["task_id"]))
         if record is None and classification is not None:
             continue
         hit = int(bool(episode["success"]))
+        weight = 1.0
+        if weight_lookup:
+            level = record.get("difficulty_level")
+            key = (episode["suite"], record["category"], "unlabeled" if level is None else str(level))
+            weight = weight_lookup[key]
+        weighted_total[0] += hit * weight
+        weighted_total[1] += weight
         buckets = [by_suite[episode["suite"]], total]
         if record is not None:
             buckets.append(by_category[record["category"]])
@@ -126,6 +155,7 @@ def main() -> int:
         return 100.0 * bucket[0] / bucket[1] if bucket[1] else float("nan")
 
     micro = rate(total)
+    weighted_micro = 100.0 * weighted_total[0] / weighted_total[1]
     scored_categories = [c for c in common.CATEGORIES if by_category[c][1]]
     macro = sum(rate(by_category[c]) for c in scored_categories) / len(scored_categories) if scored_categories else micro
 
@@ -140,6 +170,8 @@ def main() -> int:
         f"episodes: **{total[1]}** ({trials_per_task:.0f} trial/task), errored {len(errored)}"
     )
     lines.append(f"- **overall (micro) = {micro:.2f}%**  ±{wilson_halfwidth(*total):.2f}pt (95% Wilson)")
+    if weight_lookup:
+        lines.append(f"- **selection score (population-weighted) = {weighted_micro:.2f}%**")
     if scored_categories:
         lines.append(f"- overall (macro over 7 dims) = {macro:.2f}%")
     if incomplete:
@@ -194,6 +226,8 @@ def main() -> int:
             "expected": len(expected_keys),
             "errored": len(errored),
             "overall_micro": round(micro, 4),
+            "overall_weighted": round(weighted_micro, 4) if weight_lookup else None,
+            "selection_score": round(weighted_micro if weight_lookup else micro, 4),
             "overall_macro": round(macro, 4),
             "by_category": {c: {"successes": by_category[c][0], "episodes": by_category[c][1],
                                 "rate": round(rate(by_category[c]), 4)}
