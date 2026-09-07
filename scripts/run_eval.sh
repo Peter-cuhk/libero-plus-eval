@@ -142,6 +142,13 @@ if [[ ! -e "$eval_prefix/lib/libMagickWand-7.Q16HDRI.so" ]]; then
     echo "Evaluation env is missing ImageMagick: $eval_prefix/lib (run bootstrap_eval_host.sh)" >&2
     exit 1
 fi
+# The eval env ships its own torch. Some DLC images (e.g. pai-dlc/pytorch-training)
+# put a *different-Python* torch on LD_LIBRARY_PATH (/usr/local/lib/python3.10/
+# .../torch/lib), and its libtorch_python.so wins the DT_RUNPATH-vs-LD_LIBRARY_PATH
+# search, blowing up the py38 client with "undefined symbol PyObject_GET_WEAKREFS_LISTPTR".
+# Prepend the eval env's own torch/lib so it always wins. (Harmless on images
+# without a conflicting torch.)
+eval_torch_lib="$(echo "$eval_prefix"/lib/python*/site-packages/torch/lib)"
 
 echo "=== LIBERO-plus eval ==="
 echo "  benchmark    : $BENCHMARK ($benchmark_root)"
@@ -229,7 +236,7 @@ env \
     LIBERO_CONFIG_PATH="$libero_config_dir" \
     PYTHONPATH="$benchmark_root:$OPENPI_REPO/packages/openpi-client/src${PYTHONPATH:+:$PYTHONPATH}" \
     MAGICK_HOME="$eval_prefix" \
-    LD_LIBRARY_PATH="$run_libs:$eval_prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+    LD_LIBRARY_PATH="${eval_torch_lib}:$run_libs:$eval_prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
     ${egl_manifest:+__EGL_VENDOR_LIBRARY_FILENAMES="$egl_manifest"} \
     MUJOCO_GL="$MUJOCO_GL_BACKEND" \
     PYOPENGL_PLATFORM="$MUJOCO_GL_BACKEND" \

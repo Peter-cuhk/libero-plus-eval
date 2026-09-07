@@ -303,6 +303,25 @@ bundled ptxas 是 CUDA 12.6 的，不认 sm_120（Blackwell = CC 12.0），XLA �
 
 **换机器/换环境后仍然：先 smoke（`splits/smoke_v1.json`、1 卡）跑通策略链路，
 再跑净版 LIBERO 2,000ep 回归对齐 97.10**，对不上就别信任何 Pro5000 上的新数字。
+
+### 3.5.7 评测客户端 torch 冲突：DLC 镜像的 py3.10 torch 抢了 py38 的
+
+2026-09-08 首个 Pro5000 smoke（`dlcj3m5u2bg69mya`）**Failed** 在这上面：
+
+```
+py38 评测环境 import torch
+→ ImportError: /usr/local/lib/python3.10/dist-packages/torch/lib/libtorch_python.so:
+  undefined symbol: PyObject_GET_WEAKREFS_LISTPTR
+```
+
+`pai-dlc/pytorch-training:2.4.0-...-py3.10-...` 镜像自带一个 **python3.10** 的 torch，
+并把它的 `torch/lib` 放进了容器默认 `LD_LIBRARY_PATH`。评测 env 是 **py38**（torch 1.11），
+它的 `torch/_C` 用 DT_RUNPATH 找 `libtorch_python.so`——RUNPATH 排在 LD_LIBRARY_PATH
+之后，于是 3.10 的那个被抢先加载，ABI 对不上就炸。H20 的 mmld 镜像没这问题。
+
+修法（`run_eval.sh` 已做）：把评测 env 自己的 `lib/python*/site-packages/torch/lib`
+**前置**到客户端 `LD_LIBRARY_PATH`，让它稳赢。改完 smoke 通过：
+`14/14 tasks | success 10 | errors 0`（对齐 H20 smoke 的 9/14，errors 0）。
 ---
 
 ## 四、PPU 侧为什么不能评测（实测）
