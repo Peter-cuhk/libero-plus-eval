@@ -154,8 +154,16 @@ echo "  renderer     : $MUJOCO_GL_BACKEND"
 
 # ---------------------------------------------------------------- policy server
 cd "$OPENPI_REPO"
+# The pai-dlc images do not all ship uv; keep a copy on CPFS as the fallback.
+: "${UV_BIN:=}"
+if [[ -z "$UV_BIN" ]]; then
+    UV_BIN="$(command -v uv || true)"
+    [[ -n "$UV_BIN" ]] || UV_BIN=/mnt/cpfs/PeterX/tools/uv
+fi
+[[ -x "$UV_BIN" ]] || { echo "找不到 uv: $UV_BIN" >&2; exit 1; }
 if [[ "$SKIP_UV_SYNC" != "1" ]]; then
-    UV_CACHE_DIR="$UV_CACHE_DIR" uv sync --frozen
+    UV_CACHE_DIR="$UV_CACHE_DIR" UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-/mnt/cpfs/PeterX/tools/uv_pythons}" \
+        "$UV_BIN" sync --frozen
 elif [[ ! -x "$OPENPI_REPO/.venv/bin/python" ]]; then
     echo "openpi venv 不存在: $OPENPI_REPO/.venv (先跑 bootstrap_eval_host.sh，或设 SKIP_UV_SYNC=0)" >&2
     exit 1
@@ -168,7 +176,7 @@ OPENPI_DATA_HOME="$OPENPI_DATA_HOME" \
 UV_CACHE_DIR="$UV_CACHE_DIR" \
 JAX_COMPILATION_CACHE_DIR="$JAX_COMPILATION_CACHE_DIR" \
 XLA_PYTHON_CLIENT_PREALLOCATE=false \
-uv run "${uv_args[@]}" scripts/serve_policy.py \
+"$UV_BIN" run "${uv_args[@]}" scripts/serve_policy.py \
     --env LIBERO \
     --port "$SERVER_PORT" \
     policy:checkpoint \
