@@ -212,7 +212,45 @@ envprobe 日志末尾是 `DEBUG_MAKE_ENV_OK KITCHEN_SCENE4_..._noise_10 50 13.38
 `EGL_PLATFORM` 由 `EGL_PLATFORM_MODE`（默认 `surfaceless`）控制，置空即可关掉。
 退出时的 `EGLError: <exception str() failed>` 仍然是 mujoco 析构器噪音，不影响结果。
 
-### 3.5.4 **还没验证的**：policy server 在 Blackwell 上的 JAX
+### 3.5.4 卡本身
+
+1 卡 job（`dlc1bqy8lm851dj4`）实测：
+
+```
+NVIDIA RTX PRO 5000 72GB      73415 MiB
+driver 580.126.09             CUDA 13.0
+```
+
+对照 H20-3e 的 143771 MiB —— **显存只有一半**，切分片和调 `NUM_WORKERS` 时要记得。
+
+### 3.5.5 `uv sync` 只能在 DLC job 里跑，**不能在 DSW 上跑**
+
+这个坑很隐蔽，症状是"`uv sync` 卡住不动、不报错、也不超时"：
+
+* `openpi-ar/uv.lock` 锁的下载地址是 **`https://files.pythonhosted.org/...`**。
+  `--frozen` 会照着 lock 里的 URL 取包，`env.sh` 设的 `UV_DEFAULT_INDEX`
+  （阿里云镜像）**对它完全不起作用**。
+* PPU DSW 到 `files.pythonhosted.org` **不通**（`curl` 40s 超时）。所以 `uv sync`
+  会挂在那儿：实测 22 分钟里网卡收 0 字节、cache 无写入、site-packages 一直是 3 个，
+  但进程还活着、日志停在 `Downloading torch (783.1MiB)` 不动。
+* **DLC job 里通**（同一条命令在 `dlc1bqy8lm851dj4` 上正常开始下载）。
+
+⇒ **建 venv 一律提一个 DLC job 去做**，别在开发机上等。
+
+DLC 镜像（`pai-dlc/pytorch-training:...`）不一定自带 `uv`，所以在 CPFS 上放了一份：
+`/mnt/cpfs/PeterX/tools/uv`，job 命令里 `export PATH=/mnt/cpfs/PeterX/tools:$PATH` 即可。
+
+建 venv 的 job 命令（同时验 JAX 是否吃到卡）：
+
+```bash
+set -eu && export UV_CACHE_DIR=/mnt/cpfs/uv_cache \
+  && export UV_PYTHON_INSTALL_DIR=/mnt/cpfs/PeterX/tools/uv_pythons \
+  && export UV_LINK_MODE=copy && export PATH=/mnt/cpfs/PeterX/tools:$PATH \
+  && nvidia-smi && cd /mnt/cpfs/PeterX/policy/openpi-ar && uv sync --frozen \
+  && .venv/bin/python -c "import jax; print(jax.devices())"
+```
+
+### 3.5.6 **还没验证的**：policy server 在 Blackwell 上的 JAX
 
 这是迁移后**唯一没落地的一环**，不要当成已经能跑：
 

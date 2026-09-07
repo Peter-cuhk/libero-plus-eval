@@ -135,7 +135,10 @@ grep -q 'name="pi05_libero"' "$OPENPI_AR/src/openpi/training/config.py" || {
     echo "  这个 openpi 里没有 pi05_libero 配置" >&2; exit 1; }
 echo "  pi05_libero 配置存在 ✓"
 
-step "4. openpi 服务端 venv (uv sync, 首次约 15-30 分钟)"
+# 这一步只能在 DLC job 里跑：uv.lock 锁的是 files.pythonhosted.org 的 URL，
+# --frozen 不理会 UV_DEFAULT_INDEX，而 PPU DSW 到 pythonhosted 不通，
+# 在开发机上执行会静默卡死（见 docs/RUNBOOK.md §3.5.5）。
+step "4. openpi 服务端 venv (uv sync；DLC 上实测约 350 KB/s，2.5G 依赖要 1-2 小时)"
 # A venv left behind by a job whose managed interpreter lived in the ephemeral
 # $HOME has a dangling bin/python. uv will not necessarily repair that, so drop
 # it and rebuild rather than syncing on top of a broken base.
