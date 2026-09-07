@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Shard a LIBERO-plus evaluation across N single-GPU H20 DLC jobs.
+"""Shard a LIBERO-plus evaluation across N single-GPU Pro5000 DLC jobs.
 
-Submission happens from the PPU dev box, but the jobs run in Beijing against a
-different CPFS. Nothing about the Beijing side can be stat'd from here, so every
-precondition (checkpoint committed, benchmark present, eval venv built) is
-compiled into the job command itself and fails the job in its first seconds
-rather than after an hour of rollouts.
+评测算力 2026-09 从 H20/北京 迁到 Pro5000/乌兰察布（pai-toolkit 的 `pro5000.py`,
+configs/5kpro.yaml）。Pro5000 与 PPU 同 region、挂同一组数据源，所以提交端和
+job 端看到的是**同一份** /mnt/cpfs/PeterX 与 /mnt/oss/PeterX——ckpt 不再需要
+跨区搬运。
+
+前置条件（ckpt 写完整、benchmark 在位、评测 venv 建好）仍然编译进 job 命令，
+在头几秒就失败，而不是跑一小时才发现。
 
 Always inspect a --dry-run before submitting for real.
 """
@@ -38,7 +40,7 @@ def build_command(args, split_path: str, shard_index: int, shard_out: str) -> st
     if not args.ckpt.startswith("gs://"):
         checks.append(
             f"test -f {shlex.quote(args.ckpt + '/params/_METADATA')} || "
-            f"{{ echo 'CHECKPOINT NOT COMMITTED (cross-region copy incomplete?): {args.ckpt}'; exit 1; }}"
+            f"{{ echo 'CHECKPOINT NOT COMMITTED (写盘未完成?): {args.ckpt}'; exit 1; }}"
         )
         if args.expect_ckpt_bytes:
             checks.append(
@@ -86,19 +88,19 @@ def main() -> int:
     parser.add_argument(
         "--split-remote",
         default="",
-        help="Job-side split path when Beijing cannot see the submitter's local path",
+        help="Job 侧的 split 路径（默认与本地路径相同：两端共用同一套 CPFS）",
     )
     parser.add_argument("--shards", type=int, required=True)
     parser.add_argument("--exp", required=True, help="Experiment id, e.g. B0b-pi05-libero-official")
-    parser.add_argument("--out", required=True, help="Beijing output root, e.g. /mnt/oss/PeterX/outputs/<exp>/eval/full-YYYYMMDD")
+    parser.add_argument("--out", required=True, help="输出根目录，例如 /mnt/oss/PeterX/outputs/<exp>/eval/full-YYYYMMDD")
     parser.add_argument("--config", default="pi05_libero")
     parser.add_argument("--ckpt", default="gs://openpi-assets/checkpoints/pi05_libero")
-    parser.add_argument("--expect-ckpt-bytes", default="", help="Assert `du -sb` of the checkpoint matches (cross-region integrity)")
+    parser.add_argument("--expect-ckpt-bytes", default="", help="断言 ckpt 的 `du -sb` 字节数（拷贝完整性自检）")
     parser.add_argument("--benchmark", choices=["plus", "clean"], default="plus")
     parser.add_argument("--benchmark-root", default="/mnt/cpfs/PeterX/repos/LIBERO-plus")
     parser.add_argument("--openpi-repo", default="/mnt/cpfs/PeterX/policy/openpi-ar")
     parser.add_argument("--eval-python", default="/mnt/cpfs/PeterX/env/libero-plus-eval-py38/bin/python")
-    parser.add_argument("--repo", default=DEFAULT_REPO, help="libero-plus-eval checkout on the Beijing CPFS")
+    parser.add_argument("--repo", default=DEFAULT_REPO, help="job 侧的 libero-plus-eval checkout（共享 CPFS 上的同一份）")
     parser.add_argument("--num-workers", type=int, default=16)
     parser.add_argument("--num-trials-per-task", type=int, default=0, help="0 = protocol default (plus:1, clean:50)")
     parser.add_argument("--seed", type=int, default=7)
@@ -109,16 +111,18 @@ def main() -> int:
     parser.add_argument("--gpu", type=int, default=1)
     parser.add_argument("--cpu", type=int, default=16)
     parser.add_argument("--memory", default="128Gi")
-    parser.add_argument("--template", default="jobs/h20/debug-1gpu.yaml")
+    parser.add_argument("--template", default="jobs/5kpro/debug-1gpu.yaml")
+    parser.add_argument("--entrypoint", default="pro5000.py",
+                        help="pai-toolkit 入口脚本；H20 关停后默认 pro5000.py")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--print-only", "--write-shards-only", dest="print_only", action="store_true",
                         help="Print the job commands and submit nothing")
     args = parser.parse_args()
 
-    # The split file is committed and present in both regions, and slicing is
-    # deterministic, so each job derives its own slice. Nothing per-job needs to
-    # be written here -- the two CPFS filesystems are not shared, so a shard file
-    # written next to this script would simply not exist where the job runs.
+    # The split file is committed and slicing is deterministic, so each job
+    # derives its own slice from it. 这是 H20 时代两套 CPFS 不通留下的设计；
+    # 现在两端共享同一套 CPFS，写分片文件也能工作，但保持原样——分片纯由
+    # (split, shards, shard_index) 决定，成绩才可复现。
     split = common.load_shard(args.split)
     pieces = make_shards.make_shards(split, args.shards)
     split_remote = args.split_remote or args.split
@@ -146,7 +150,7 @@ def main() -> int:
     failures = 0
     for name, command, _ in commands:
         argv = [
-            "uv", "run", "pai.py", "submit",
+            "uv", "run", args.entrypoint, "submit",
             "-n", name,
             "-c", command,
             "-t", args.template,

@@ -2,6 +2,11 @@
 
 跑评测之前先读这一页。每条都是实测结论，不是猜测。
 
+> **2026-09 算力变更**：H20 / 北京已关停，评测迁到 **Pro5000 / 乌兰察布**。
+> 现行事实看 [§三点五](#三点五pro5000--乌兰察布侧的实测事实现行)；§三 是 H20 的历史记录，
+> 保留是因为病根（EGL ICD 缺失、ossfs2 不能当工作目录、uv 托管 python 要落 CPFS）
+> 在新集群上一模一样。
+
 ---
 
 ## 一、必须原样复刻、**不要"修好"**的 benchmark 行为
@@ -69,7 +74,7 @@ LIBERO-plus 的扰动已经把 init state 编进任务名，每个任务只有 1
 
 ---
 
-## 三、北京 H20 侧的实测事实
+## 三、北京 H20 侧的实测事实（历史；H20 已于 2026-09 关停）
 
 探测 job：`dlcrzmz9mv5h7ats`（0 卡）、`dlcoe0op6ptpeu6g`（1 卡）、`dlc1pki9zen2ygzj`（EGL 修复验证）。
 
@@ -159,6 +164,72 @@ export UV_PYTHON_INSTALL_DIR=/mnt/cpfs/PeterX/tools/uv_pythons   # 必须
 `$OPENPI_DATA_HOME/<netloc>/<path>`，即
 `gs://openpi-assets/checkpoints/pi05_libero` → `/mnt/cpfs/PeterX/data/openpi_data/openpi-assets/checkpoints/pi05_libero`。
 预先按这个布局放好文件，`serve_policy --policy.dir gs://...` 会直接命中缓存、不再下载。
+
+---
+
+## 三点五、Pro5000 / 乌兰察布侧的实测事实（现行）
+
+### 3.5.1 集群坐标
+
+| 项 | 值 |
+|---|---|
+| 入口 | `skills/pai-toolkit` → **`pro5000.py`**（`configs/5kpro.yaml`） |
+| region | `cn-wulanchabu`（**和 PPU 同一个**） |
+| workspace | `293248`（`ai_platform_ws_5kpro`） |
+| 配额 | `quotam3rsay5sm3t`（`ai_pai_quota_5kpro`），**24 GPU / 765c / 4410Gi**，ECS 型 |
+| 镜像 | `registry.cn-wulanchabu.aliyuncs.com/pai-dlc/pytorch-training:2.4.0-gpu-py3.10-cu12.5-ngc24.06-ubuntu22.04` |
+| 数据源 | `d-r8j0kpemv8hxx00ucr`→`/mnt/cpfs/`、`d-6f7a61uo2kuq1xbdh7`→`/mnt/oss/` |
+
+`cn-beijing` 下已经**查不到任何配额**（`pai.py status` 直接 404），H20 是真的没了。
+
+### 3.5.2 和 PPU 共用同一套存储 —— 跨区搬运整条流程作废
+
+上表两个数据源 id 与 `configs/ppu.yaml` **逐字相同**：训练 job 和评测 job 看到的
+`/mnt/cpfs/PeterX`、`/mnt/oss/PeterX` 是同一份。
+
+* ckpt 训完**直接开评**，不再需要 `coco-transfer-team-data` / rclone 跨区拷贝与校验。
+* `--expect-ckpt-bytes` 从"跨区完整性校验"降级为普通的写盘完整性自检，可选。
+* 官方 `pi05_libero` 已经落在 CPFS：`/mnt/cpfs/PeterX/data/openpi_data/openpi-assets/checkpoints/pi05_libero`
+  （12G，`params/_METADATA` 齐全）。**不用再从 `gs://` 拉那一个小时。**
+
+### 3.5.3 EGL：和 H20 同一个病根，同一个解法
+
+Pro5000 上实测渲染成功的组合（探测 job `dlcytozkacvpipym` = envprobe、
+`dlcyjgyru2jp3mod` = render-preflight2，都 Succeeded）：
+
+```bash
+printf '{"file_format_version":"1.0.0","ICD":{"library_path":"libEGL_nvidia.so.0"}}\n' > 10_nvidia.json
+export __EGL_VENDOR_LIBRARY_FILENAMES=$PWD/10_nvidia.json
+export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl MUJOCO_EGL_DEVICE_ID=0
+export EGL_PLATFORM=surfaceless        # ← H20 时代没有这一行
+```
+
+envprobe 日志末尾是 `DEBUG_MAKE_ENV_OK KITCHEN_SCENE4_..._noise_10 50 13.38`，
+说明 **LIBERO-plus 的环境在 Pro5000 上能构造并渲染**，用的就是现有的
+`/mnt/cpfs/PeterX/env/libero-plus-eval-py38`（共享 CPFS，不用重建）。
+
+`run_eval.sh` 已经把这一套接进去：ICD 清单照旧自动生成，多出来的
+`EGL_PLATFORM` 由 `EGL_PLATFORM_MODE`（默认 `surfaceless`）控制，置空即可关掉。
+退出时的 `EGLError: <exception str() failed>` 仍然是 mujoco 析构器噪音，不影响结果。
+
+### 3.5.4 **还没验证的**：policy server 在 Blackwell 上的 JAX
+
+这是迁移后**唯一没落地的一环**，不要当成已经能跑：
+
+* `policy/openpi-ar/.venv/bin/python` 现在是**断的符号链接**，指向
+  `/root/.local/share/uv/python/cpython-3.11-.../bin/python3.11`（容器本地，早没了），
+  而 CPFS 上的那份在 `/mnt/cpfs/PeterX/tools/uv_pythons/`。
+  → 第一次跑之前必须带 `UV_PYTHON_INSTALL_DIR=/mnt/cpfs/PeterX/tools/uv_pythons` 重建
+  （见 §3.5 的老坑，`bootstrap_eval_host.sh` 已经设了这个变量）。
+* 就算 venv 修好，`openpi-ar` 锁的 jaxlib 能不能在 Pro5000（sm_120）上出 GPU device
+  **没有实测过**。同集群上唯一跑通过策略推理的是 `policy/ttt-vla`，它是自己搭了一层
+  overlay 才成的：torch `2.9.1+cu128` + `jax-cuda12-plugin==0.5.3` / `jax-cuda12-pjrt==0.5.3`，
+  配 `JAX_PLATFORMS=cuda`、`XLA_PYTHON_CLIENT_MEM_FRACTION=0.7`，
+  见 `policy/ttt-vla/scripts/ttt_vla/launch_libero_plus_cascade_pro5000.sh`。
+
+**所以换机器后的第一件事是 smoke：** `splits/smoke_v1.json`、1 卡、看 policy server
+的 `jax.devices()` 是不是 GPU。smoke 通过之后**再跑净版 LIBERO 2,000ep 回归对齐
+97.10**，对不上就别信任何 Pro5000 上的新数字。
 
 ---
 

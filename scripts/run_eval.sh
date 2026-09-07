@@ -9,8 +9,9 @@
 # the same script serves smoke runs, the clean-LIBERO regression and full 10,030
 # episode shards without editing anything.
 #
-# The EGL handling here is lifted from openpi-icl's run_pi05_libero_eval.sh,
-# which is the version that has actually rendered LIBERO on these H20 nodes.
+# The EGL handling here is lifted from openpi-icl's run_pi05_libero_eval.sh.
+# 它在 H20 上跑通过，2026-09 迁到 Pro5000 后同一套 ICD 清单 + surfaceless
+# 平台也实测渲染成功（探测 job dlcytozkacvpipym / dlcyjgyru2jp3mod）。
 
 set -euo pipefail
 
@@ -52,7 +53,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 : "${SERVER_PORT:=8000}"
 : "${SERVER_START_TIMEOUT:=1800}"      # first run must download the checkpoint
 : "${SERVER_HANDSHAKE_TIMEOUT_S:=600}"
-# Default OFF: bootstrap_h20.sh owns the openpi venv. A full run submits 8 shard
+# Default OFF: bootstrap_eval_host.sh owns the openpi venv. A full run submits 8 shard
 # jobs that all point at the same .venv, and having each of them `uv sync` it
 # concurrently is both wasteful and a race. Set to 0 only for a single job whose
 # venv is known to be stale.
@@ -61,6 +62,9 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 : "${EGL_VENDOR_LIBRARY:=libEGL_nvidia.so.0}"
 : "${EGL_LOADER_LIBRARY:=/usr/lib/x86_64-linux-gnu/libEGL.so.1}"
 : "${MUJOCO_GL_BACKEND:=egl}"
+# Pro5000（NVIDIA Blackwell）上实测通过的组合里带着 surfaceless 平台；
+# 置空即可关掉。
+: "${EGL_PLATFORM_MODE:=surfaceless}"
 : "${EXTRA_LIB_DIR:=}"                 # optional dir of .so files to prepend to LD_LIBRARY_PATH
 
 case "$BENCHMARK" in
@@ -83,7 +87,7 @@ esac
 for path in "$shard_file" "$benchmark_root" "$OPENPI_REPO"; do
     [[ -e "$path" ]] || { echo "Missing required path: $path" >&2; exit 1; }
 done
-[[ -x "$EVAL_PYTHON" ]] || { echo "Missing eval python: $EVAL_PYTHON (run bootstrap_h20.sh)" >&2; exit 1; }
+[[ -x "$EVAL_PYTHON" ]] || { echo "Missing eval python: $EVAL_PYTHON (run bootstrap_eval_host.sh)" >&2; exit 1; }
 [[ -f "$OPENPI_REPO/uv.lock" ]] || { echo "Not an openpi repo: $OPENPI_REPO" >&2; exit 1; }
 # A local checkpoint must be fully committed; a gs:// URI is fetched by the server.
 if [[ "$CHECKPOINT_DIR" != gs://* && ! -f "$CHECKPOINT_DIR/params/_METADATA" ]]; then
@@ -135,7 +139,7 @@ fi
 # search path and point wand at it.
 eval_prefix="$(dirname "$(dirname "$EVAL_PYTHON")")"
 if [[ ! -e "$eval_prefix/lib/libMagickWand-7.Q16HDRI.so" ]]; then
-    echo "Evaluation env is missing ImageMagick: $eval_prefix/lib (run bootstrap_h20.sh)" >&2
+    echo "Evaluation env is missing ImageMagick: $eval_prefix/lib (run bootstrap_eval_host.sh)" >&2
     exit 1
 fi
 
@@ -153,7 +157,7 @@ cd "$OPENPI_REPO"
 if [[ "$SKIP_UV_SYNC" != "1" ]]; then
     UV_CACHE_DIR="$UV_CACHE_DIR" uv sync --frozen
 elif [[ ! -x "$OPENPI_REPO/.venv/bin/python" ]]; then
-    echo "openpi venv 不存在: $OPENPI_REPO/.venv (先跑 bootstrap_h20.sh，或设 SKIP_UV_SYNC=0)" >&2
+    echo "openpi venv 不存在: $OPENPI_REPO/.venv (先跑 bootstrap_eval_host.sh，或设 SKIP_UV_SYNC=0)" >&2
     exit 1
 fi
 uv_args=(--frozen)
@@ -222,6 +226,7 @@ env \
     MUJOCO_GL="$MUJOCO_GL_BACKEND" \
     PYOPENGL_PLATFORM="$MUJOCO_GL_BACKEND" \
     MUJOCO_EGL_DEVICE_ID=0 \
+    ${EGL_PLATFORM_MODE:+EGL_PLATFORM="$EGL_PLATFORM_MODE"} \
     "$EVAL_PYTHON" "$repo_root/python/eval_libero_plus.py" "${client_args[@]}"
 
 printf '%s\n' \

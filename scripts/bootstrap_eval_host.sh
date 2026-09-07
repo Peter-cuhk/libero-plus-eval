@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
-# One-time Beijing/H20 setup: LIBERO-plus + assets, an openpi serving repo, and
-# the python 3.8 evaluation environment.
+# One-time evaluation-host setup: LIBERO-plus + assets, an openpi serving repo,
+# and the python 3.8 evaluation environment.
+#
+# 评测算力在 2026-09 从 H20/北京 迁到 Pro5000/乌兰察布（configs/5kpro.yaml）。
+# Pro5000 与 PPU 同 region、共用同一套 CPFS，所以这份基建装一次两边都看得到，
+# 正常情况下**已经装好了**，这个脚本只是幂等地补齐/校验。
 #
 # Self-contained on purpose: runs as a DLC job command with nothing but the
-# Beijing CPFS available. Every step is idempotent, so a failed run can simply
-# be resubmitted.
+# CPFS available. Every step is idempotent, so a failed run can simply be
+# resubmitted.
 #
-# Verified by the probe jobs (dlcrzmz9mv5h7ats / dlcoe0op6ptpeu6g):
-#   - github.com and huggingface.co are directly reachable from Beijing DLC,
-#     so nothing has to be copied across regions.
-#   - the DLC images have libEGL_nvidia but no /usr/share/glvnd/egl_vendor.d,
-#     which run_eval.sh works around with its own ICD manifest.
-#   - micromamba is not in the image; we use the copy on CPFS.
+# 实测依据（H20 探测 job dlcrzmz9mv5h7ats / dlcoe0op6ptpeu6g，Pro5000 探测 job
+# dlcytozkacvpipym / dlcyjgyru2jp3mod）：
+#   - github.com 与 huggingface.co 从 DLC 直连可达，不需要跨区搬。
+#   - DLC 镜像有 libEGL_nvidia 但没有 /usr/share/glvnd/egl_vendor.d，
+#     run_eval.sh 自己生成 ICD 清单绕过（H20 与 Pro5000 都是这个病根）。
+#   - micromamba 不在镜像里；用 CPFS 上的那份。
 
 set -euo pipefail
 
@@ -33,8 +37,9 @@ step "0. 前置检查"
 region=$(df /mnt/cpfs 2>/dev/null | tail -1)
 echo "  /mnt/cpfs -> $region"
 case "$region" in
-    *cn-beijing*) echo "  region: 北京 ✓" ;;
-    *) echo "  拒绝执行：这不是北京的 CPFS。评测基建只装在 H20 侧。" >&2; exit 1 ;;
+    *cn-wulanchabu*) echo "  region: 乌兰察布 ✓（PPU 与 Pro5000 共用这套 CPFS）" ;;
+    *cn-beijing*) echo "  拒绝执行：北京 / H20 已于 2026-09 关停。" >&2; exit 1 ;;
+    *) echo "  拒绝执行：认不出这套 CPFS（期望乌兰察布）。" >&2; exit 1 ;;
 esac
 test -d "$PETERX" || { echo "  $PETERX 不存在" >&2; exit 1; }
 export UV_CACHE_DIR=${UV_CACHE_DIR:-/mnt/cpfs/uv_cache}

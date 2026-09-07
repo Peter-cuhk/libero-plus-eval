@@ -13,22 +13,28 @@
 | dev split | `splits/dev_v1.json`，seed **20260806**，每维 220 条，共 **1,540** |
 | 评测端代码 | **只读**。改了 LIBERO-plus 任何一行，成绩作废 |
 
-## 集群分工
+## 集群分工（2026-09 更新：H20 关停，评测迁到 Pro5000）
 
-* **训练**在 PPU / 乌兰察布（`ppu.py`）。
-* **评测**在 H20 / 北京（`pai.py`）——PPU 节点没有 `libEGL`、没有 `/dev/dri`，MuJoCo 渲染跑不了。
-* 两套 CPFS **不互通**，checkpoint 必须跨区搬到北京并校验后才能开评测。
+* **训练**在 PPU / 乌兰察布（`ppu.py`，配额 `ai_pai_quota`）。
+* **评测**在 Pro5000 / 乌兰察布（`pro5000.py`，配额 `ai_pai_quota_5kpro` = 24 GPU）——
+  PPU 节点没有 `libEGL`、没有 `/dev/dri`，MuJoCo 渲染跑不了，必须用 NVIDIA 卡。
+* **两边同 region、挂同一组数据源**（`d-r8j0kpemv8hxx00ucr`→`/mnt/cpfs/`、
+  `d-6f7a61uo2kuq1xbdh7`→`/mnt/oss/`），看到的是同一份 `/mnt/cpfs/PeterX` 与
+  `/mnt/oss/PeterX`。**checkpoint 不需要任何搬运，训完直接开评。**
+* ~~H20 / 北京（`pai.py`）~~：2026-09 已关停，`cn-beijing` 下已经查不到任何配额。
+  历史成绩仍然有效（同一套代码、同一份 split），但新任务一律走 `pro5000.py`。
 * 本机 PPU 只能跑 `python/smoke_env.py`（OSMesa 软件渲染、不接策略），用来验证 LIBERO-plus 装对了。
 
 ## 用法
 
 ```bash
-# 0. 一次性：北京侧备齐 LIBERO-plus / openpi-ar / py38 评测环境
-bash scripts/bootstrap_h20.sh
+# 0. 一次性：备齐 LIBERO-plus / openpi-ar / py38 评测环境。
+#    共享 CPFS 上这三样通常已经在位，脚本是幂等的，只做补齐与校验。
+bash scripts/bootstrap_eval_host.sh
 
 # 1. 分片提交（先 dry-run 核对卡数/路径/镜像）
-#    每个 job 自己从已提交的 split 里按 shard_index 切片——两套 CPFS 不通，
-#    在提交端生成的分片文件在 job 那边根本不存在。
+#    每个 job 自己从已提交的 split 里按 shard_index 切片，分片只由
+#    (split, shards, shard_index) 决定，成绩可复现。
 python scripts/submit_eval.py --split splits/dev_v1.json --shards 4 \
     --exp E101-xiaomi-dynamic --ckpt /mnt/oss/PeterX/outputs/E101-xiaomi-dynamic/checkpoints/.../30000 \
     --out /mnt/oss/PeterX/outputs/E101-xiaomi-dynamic/eval/dev-20260806 --dry-run
@@ -52,10 +58,11 @@ python/fetch_gcs_checkpoint.py GCS checkpoint 并行预下载
 python/make_dev_split.py       生成冻结的 dev split
 python/make_shards.py          split → N 个均衡分片
 python/aggregate.py            分片 → 七维表 + overall + EXPERIMENTS.csv 片段
-scripts/probe_h20.sh           北京侧环境探测（0 卡 DLC job）
-scripts/bootstrap_h20.sh       北京侧一次性基建
+scripts/probe_eval_host.sh     评测侧环境探测（0 卡 DLC job）
+scripts/probe_eval_host_gpu.sh 评测侧带卡探测（EGL 结论必须用 >=1 卡的 job 得）
+scripts/bootstrap_eval_host.sh 评测侧一次性基建
 scripts/run_eval.sh            单分片：起 policy server + 跑 client
-scripts/submit_eval.py         分片提交到 H20 DLC
+scripts/submit_eval.py         分片提交到 Pro5000 DLC（--entrypoint 可换集群入口）
 docs/RUNBOOK.md                踩坑清单与 benchmark 行为备忘（**先读这个**）
 ```
 
