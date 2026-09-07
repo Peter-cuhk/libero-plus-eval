@@ -223,52 +223,86 @@ driver 580.126.09             CUDA 13.0
 
 对照 H20-3e 的 143771 MiB —— **显存只有一半**，切分片和调 `NUM_WORKERS` 时要记得。
 
-### 3.5.5 `uv sync` 只能在 DLC job 里跑，**不能在 DSW 上跑**
+### 3.5.5 建 venv 必须走国内镜像，**别用 `uv sync --frozen`**
 
-这个坑很隐蔽，症状是"`uv sync` 卡住不动、不报错、也不超时"：
+这个坑很贵：直接 `uv sync --frozen` 会**卡到天荒地老**（实测提了个 DLC job
+`dlc1bqy8lm851dj4`，跑满 24 小时都没下完 torch/cudnn，最后手动停掉）。
 
-* `openpi-ar/uv.lock` 锁的下载地址是 **`https://files.pythonhosted.org/...`**。
-  `--frozen` 会照着 lock 里的 URL 取包，`env.sh` 设的 `UV_DEFAULT_INDEX`
-  （阿里云镜像）**对它完全不起作用**。
-* PPU DSW 到 `files.pythonhosted.org` **不通**（`curl` 40s 超时）。所以 `uv sync`
-  会挂在那儿：实测 22 分钟里网卡收 0 字节、cache 无写入、site-packages 一直是 3 个，
-  但进程还活着、日志停在 `Downloading torch (783.1MiB)` 不动。
-* **DLC job 里通**（同一条命令在 `dlc1bqy8lm851dj4` 上正常开始下载）。
+病根：
 
-⇒ **建 venv 一律提一个 DLC job 去做**，别在开发机上等。
+* `openpi-ar/uv.lock` 把每个 wheel 的下载地址钉死成 **`https://files.pythonhosted.org/...`**。
+  `--frozen` 照着 lock 里的 URL 取包，`env.sh` 设的 `UV_DEFAULT_INDEX`（阿里云镜像）
+  **完全被绕过**。
+* 从乌兰察布到 `files.pythonhosted.org` 慢到没法用（实测 DSW 24 KB/s、DLC 节点 350 KB/s），
+  2.5G 的 torch+CUDA 依赖根本下不完。
 
-DLC 镜像（`pai-dlc/pytorch-training:...`）不一定自带 `uv`，所以在 CPFS 上放了一份：
-`/mnt/cpfs/PeterX/tools/uv`，job 命令里 `export PATH=/mnt/cpfs/PeterX/tools:$PATH` 即可。
+解法：**导出钉死版本再从国内镜像装**。镜像上的 wheel 路径带的是同一个 sha256
+（例如 torch 那个 `e5/94/34b8…`），是**字节相同**的包，换源不改版本、不改 hash，
+`uv pip install` 会做 hash 校验，**完全可复现**。实测同区镜像下 torch wheel：
 
-建 venv 的 job 命令（同时验 JAX 是否吃到卡）：
+| 源 | 速度 |
+|---|---|
+| pythonhosted（lock 默认） | 0.35 MB/s |
+| 阿里云 `mirrors.aliyun.com/pypi` | ~20 MB/s |
+| 清华 `pypi.tuna.tsinghua.edu.cn` | ~140 MB/s |
+
+整套建 venv 从 24h+ 降到约 10 分钟。配方（在**哪台机器上跑都行**——venv 落在共享
+CPFS，Pro5000 评测 job 直接用；只有最后验 `jax.devices()` 必须在 Pro5000 上，
+因为 PPU DSW 的卡 jax 认不出来）：
 
 ```bash
-set -eu && export UV_CACHE_DIR=/mnt/cpfs/uv_cache \
-  && export UV_PYTHON_INSTALL_DIR=/mnt/cpfs/PeterX/tools/uv_pythons \
-  && export UV_LINK_MODE=copy && export PATH=/mnt/cpfs/PeterX/tools:$PATH \
-  && nvidia-smi && cd /mnt/cpfs/PeterX/policy/openpi-ar && uv sync --frozen \
-  && .venv/bin/python -c "import jax; print(jax.devices())"
+cd /mnt/cpfs/PeterX/policy/openpi-ar
+export UV_CACHE_DIR=/mnt/cpfs/uv_cache UV_PYTHON_INSTALL_DIR=/mnt/cpfs/PeterX/tools/uv_pythons UV_LINK_MODE=copy
+rm -rf .venv && uv venv --python 3.11 .venv
+# 导出钉死版本 + hash（排除本地项目），再从清华镜像装
+uv export --frozen --no-emit-project --no-editable -o /tmp/openpi-ar-reqs.txt
+uv pip install --python .venv/bin/python -r /tmp/openpi-ar-reqs.txt \
+    --index-url https://pypi.tuna.tsinghua.edu.cn/simple/ \
+    --extra-index-url https://mirrors.aliyun.com/pypi/simple/
+# 本地项目单独装（无下载）
+uv pip install --python .venv/bin/python --no-deps -e . -e packages/openpi-client
 ```
 
-### 3.5.6 **还没验证的**：policy server 在 Blackwell 上的 JAX
+配套细节：
 
-这是迁移后**唯一没落地的一环**，不要当成已经能跑：
+* `uv` 在 pai-dlc 镜像里不一定有，CPFS 上放了一份 `/mnt/cpfs/PeterX/tools/uv`，
+  DLC job 里 `export PATH=/mnt/cpfs/PeterX/tools:$PATH` 即可。
+* `UV_PYTHON_INSTALL_DIR` 一定要指到 CPFS，否则 uv 下的托管解释器落在容器本地，
+  job 一结束 `.venv/bin/python` 就变成断链（见 §3.5）。
+* `AI 工具代理`（`/mnt/cpfs/tools/ai-proxy`）**帮不上这里**：实测它到 pythonhosted
+  只有 14 KB/s（比直连还慢）、且不转发 github，它只服务 codex/claude 那些 AI 端点。
 
-* `policy/openpi-ar/.venv/bin/python` 现在是**断的符号链接**，指向
-  `/root/.local/share/uv/python/cpython-3.11-.../bin/python3.11`（容器本地，早没了），
-  而 CPFS 上的那份在 `/mnt/cpfs/PeterX/tools/uv_pythons/`。
-  → 第一次跑之前必须带 `UV_PYTHON_INSTALL_DIR=/mnt/cpfs/PeterX/tools/uv_pythons` 重建
-  （见 §3.5 的老坑，`bootstrap_eval_host.sh` 已经设了这个变量）。
-* 就算 venv 修好，`openpi-ar` 锁的 jaxlib 能不能在 Pro5000（sm_120）上出 GPU device
-  **没有实测过**。同集群上唯一跑通过策略推理的是 `policy/ttt-vla`，它是自己搭了一层
-  overlay 才成的：torch `2.9.1+cu128` + `jax-cuda12-plugin==0.5.3` / `jax-cuda12-pjrt==0.5.3`，
-  配 `JAX_PLATFORMS=cuda`、`XLA_PYTHON_CLIENT_MEM_FRACTION=0.7`，
-  见 `policy/ttt-vla/scripts/ttt_vla/launch_libero_plus_cascade_pro5000.sh`。
+### 3.5.6 policy server 的 JAX 在 Blackwell 上：**已验证能跑**（jax 0.5.3 + cu126）
 
-**所以换机器后的第一件事是 smoke：** `splits/smoke_v1.json`、1 卡、看 policy server
-的 `jax.devices()` 是不是 GPU。smoke 通过之后**再跑净版 LIBERO 2,000ep 回归对齐
-97.10**，对不上就别信任何 Pro5000 上的新数字。
+2026-09-08，1 卡 Pro5000 probe job `dlcxsz8juhxuwgrb`，跑现建的 `openpi-ar/.venv`
+（jax/jaxlib 0.5.3，torch 2.7.1+cu126）：
 
+```
+NVIDIA RTX PRO 5000 72GB Blackwell, 73415 MiB
+default_backend: gpu
+devices: [CudaDevice(id=0)]
+MATMUL_OK 8589934592.0 on {CudaDevice(id=0)}          # 2048^3，结果正确
+```
+
+**结论：openpi-ar 锁的 stock jax 直接吃到 Blackwell，不需要 ttt-vla 那套 cu128 overlay。**
+（openpi-ar 恰好也锁 `jax-cuda12-plugin==0.5.3`，与 ttt-vla 验证过的同版本。）
+
+一条**良性告警**，别当错误：
+
+```
+W ... ptxas does not support CC 12.0
+W ... ptxas too old. Falling back to the driver to compile.
+```
+
+bundled ptxas 是 CUDA 12.6 的，不认 sm_120（Blackwell = CC 12.0），XLA 自动回退到
+**驱动**（580.126.09 / CUDA 13.0，支持 sm_120）做 PTX 编译——结果照跑，只是首次编译
+稍慢。要消掉它得升到 cu128 的 jaxlib，没必要。
+
+* venv 用国内镜像现建（§3.5.5），`.venv/bin/python` 已指向 CPFS 的托管解释器
+  `/mnt/cpfs/PeterX/tools/uv_pythons/...`，不是断链。
+
+**换机器/换环境后仍然：先 smoke（`splits/smoke_v1.json`、1 卡）跑通策略链路，
+再跑净版 LIBERO 2,000ep 回归对齐 97.10**，对不上就别信任何 Pro5000 上的新数字。
 ---
 
 ## 四、PPU 侧为什么不能评测（实测）

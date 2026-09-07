@@ -135,18 +135,29 @@ grep -q 'name="pi05_libero"' "$OPENPI_AR/src/openpi/training/config.py" || {
     echo "  这个 openpi 里没有 pi05_libero 配置" >&2; exit 1; }
 echo "  pi05_libero 配置存在 ✓"
 
-# 这一步只能在 DLC job 里跑：uv.lock 锁的是 files.pythonhosted.org 的 URL，
-# --frozen 不理会 UV_DEFAULT_INDEX，而 PPU DSW 到 pythonhosted 不通，
-# 在开发机上执行会静默卡死（见 docs/RUNBOOK.md §3.5.5）。
-step "4. openpi 服务端 venv (uv sync；DLC 上实测约 350 KB/s，2.5G 依赖要 1-2 小时)"
+# 不能用 `uv sync --frozen`：uv.lock 把 wheel 地址钉死成 files.pythonhosted.org，
+# --frozen 绕过 UV_DEFAULT_INDEX，而乌兰察布到 pythonhosted 慢到下不完（DSW 24KB/s、
+# DLC 350KB/s，实测 24h 都没建完）。改成导出钉死版本 + 从国内镜像装：镜像上是同
+# sha256 的字节相同 wheel，pip 会校验 hash，完全可复现，约 10 分钟。见 §3.5.5。
+step "4. openpi 服务端 venv (uv export + 国内镜像 uv pip install，约 10 分钟)"
+PIP_INDEX_URL_PRIMARY=${PIP_INDEX_URL_PRIMARY:-https://pypi.tuna.tsinghua.edu.cn/simple/}
+PIP_INDEX_URL_EXTRA=${PIP_INDEX_URL_EXTRA:-https://mirrors.aliyun.com/pypi/simple/}
 # A venv left behind by a job whose managed interpreter lived in the ephemeral
-# $HOME has a dangling bin/python. uv will not necessarily repair that, so drop
-# it and rebuild rather than syncing on top of a broken base.
+# $HOME has a dangling bin/python; rebuild from scratch rather than on top of it.
 if [[ -e "$OPENPI_AR/.venv" ]] && ! "$OPENPI_AR/.venv/bin/python" -c '' 2>/dev/null; then
     echo "  已有的 .venv 里 python 跑不起来（解释器多半已随上一个 job 消失），重建"
     rm -rf "$OPENPI_AR/.venv"
 fi
-( cd "$OPENPI_AR" && uv sync --frozen )
+(
+    cd "$OPENPI_AR"
+    reqs="$(mktemp /tmp/openpi-ar-reqs.XXXXXX.txt)"
+    [[ -x .venv/bin/python ]] || uv venv --python 3.11 .venv
+    uv export --frozen --no-emit-project --no-editable -o "$reqs"
+    uv pip install --python .venv/bin/python -r "$reqs" \
+        --index-url "$PIP_INDEX_URL_PRIMARY" --extra-index-url "$PIP_INDEX_URL_EXTRA"
+    uv pip install --python .venv/bin/python --no-deps -e . -e packages/openpi-client
+    rm -f "$reqs"
+)
 # Assert the interpreter actually runs. `[ -d .venv ]` is not enough: a venv whose
 # base interpreter lived in the job's ephemeral $HOME leaves a dangling symlink
 # that looks like a directory full of files but cannot execute anything.
